@@ -1,0 +1,70 @@
+{
+  "enabled": {
+    "description": "启用 Supermemory 长期记忆",
+    "type": "bool",
+    "default": true
+  },
+  "api_base": {
+    "description": "Supermemory API Base URL",
+    "type": "string",
+    "default": "https://api.supermemory.ai"
+  },
+  "api_key": {
+    "description": "Supermemory API Key",
+    "type": "string",
+    "default": "",
+    "hint": "在 Supermemory Developer Platform 获取 API Key。",
+    "obvious_hint": true
+  },
+  "enable_private_memory": {
+    "description": "启用私聊记忆",
+    "type": "bool",
+    "default": true
+  },
+  "enable_group_memory": {
+    "description": "启用群聊记忆",
+    "type": "bool",
+    "default": true
+  },
+  "enable_group_shared_memory": {
+    "description": "启用群公共记忆层；群聊召回会同时检索群公共记忆和当前群成员个人记忆",
+    "type": "bool",
+    "default": true
+  },
+  "recall_limit": {
+    "description": "每轮最多注入的记忆条数",
+    "type": "int",
+    "default": 5
+  },
+  "search_threshold": {
+    "description": "Supermemory 搜索阈值，0 返回更多结果，1 更严格",
+    "type": "float",
+    "default": 0.6
+  },
+  "search_mode": {
+    "description": "搜索模式：memories、hybrid 或 documents",
+    "type": "string",
+    "default": "memories",
+    "hint": "默认 memories，适合聊天长期记忆。"
+  },
+  "retain_enabled": {
+    "description": "启用回复后写入 Supermemory",
+    "type": "bool",
+    "default": true
+  },
+  "retain_user_message": {
+    "description": "写入用户本轮消息",
+    "type": "bool",
+    "default": true
+  },
+  "retain_assistant_message": {
+    "description": "写入助手本轮回复",
+    "type": "bool",
+    "default": true
+  },
+  "request_timeout_seconds": {
+    "description": "Supermemory 请求超时时间（秒）",
+    "type": "int",
+    "default": 8
+  }
+}

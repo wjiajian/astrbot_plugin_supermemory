@@ -1,0 +1,12 @@
+name: astrbot_plugin_supermemory
+display_name: Supermemory
+author: JiaJian
+version: 0.1.0
+desc: 接入 Supermemory，为私聊和群聊提供按会话隔离的长期记忆能力.
+short_desc: Scoped long-term memory backed by Supermemory.
+repo: https://github.com/wjiajian/astrbot_plugin_supermemory
+astrbot_version: ">=4.9.2"
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - qq_official_webhook
