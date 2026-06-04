@@ -65,7 +65,7 @@ class SupermemoryClient:
             "threshold": _clamp_threshold(threshold),
             "searchMode": _normalize_search_mode(search_mode),
         }
-        return await self._request_json("POST", "/v4/search", json=payload)
+        return await self._request_json("POST", "/v4/search", retryable=True, json=payload)
 
     async def ingest_conversation(
         self,
@@ -82,7 +82,7 @@ class SupermemoryClient:
         }
         if metadata:
             payload["metadata"] = metadata
-        return await self._request_json("POST", "/v4/conversations", json=payload)
+        return await self._request_json("POST", "/v4/conversations", retryable=False, json=payload)
 
     async def check_status(self, container_tag: str) -> SupermemoryStatus:
         try:
@@ -113,12 +113,20 @@ class SupermemoryClient:
             await self._client.aclose()
             self._client = None
 
-    async def _request_json(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        for attempt in range(self.max_retries + 1):
+    async def _request_json(
+        self,
+        method: str,
+        path: str,
+        *,
+        retryable: bool,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        attempts = self.max_retries + 1 if retryable else 1
+        for attempt in range(attempts):
             try:
                 return await self._request_json_once(method, path, **kwargs)
             except SupermemoryClientError as exc:
-                if attempt >= self.max_retries or not _should_retry(exc):
+                if attempt >= attempts - 1 or not _should_retry(exc):
                     raise
                 await asyncio.sleep(self.retry_base_delay_seconds * (2**attempt))
         raise SupermemoryClientError("Supermemory request failed after retries")

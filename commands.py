@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import secrets
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, Sequence
 
 from astrbot.api import logger
 
-from .memory_formatter import format_search_results
+from .memory_formatter import format_recall_results
 
 if TYPE_CHECKING:
     from .supermemory_client import SupermemoryClient
@@ -21,6 +21,11 @@ STATE_FILE = "scope_state.json"
 @dataclass
 class ScopeSwitchState:
     disabled_scopes: set[str]
+
+
+class RecallScope(Protocol):
+    scope_type: str
+    container_tag: str
 
 
 class PluginStateStore:
@@ -98,14 +103,49 @@ async def run_manual_recall(
     search_mode: str,
     title: str = "memory",
 ) -> str:
-    raw = await client.search(
+    return await run_manual_recall_for_scopes(
+        client,
         query=query,
-        container_tag=container_tag,
+        scopes=[
+            _ManualMemoryScope(
+                scope_type=title,
+                container_tag=container_tag,
+            )
+        ],
         limit=limit,
         threshold=threshold,
         search_mode=search_mode,
     )
-    formatted = format_search_results(raw, limit=limit, title=title)
-    if not formatted:
+
+
+async def run_manual_recall_for_scopes(
+    client: SupermemoryClient,
+    *,
+    query: str,
+    scopes: Sequence[RecallScope],
+    limit: int,
+    threshold: float,
+    search_mode: str,
+) -> str:
+    formatted_parts: list[str] = []
+    for scope in scopes:
+        raw = await client.search(
+            query=query,
+            container_tag=scope.container_tag,
+            limit=limit,
+            threshold=threshold,
+            search_mode=search_mode,
+        )
+        formatted = format_recall_results(raw, limit=limit, title=scope.scope_type)
+        if formatted:
+            formatted_parts.append(formatted)
+
+    if not formatted_parts:
         return "当前会话 scope 下没有召回到相关记忆。"
-    return formatted
+    return "\n".join(formatted_parts)
+
+
+@dataclass(frozen=True)
+class _ManualMemoryScope:
+    scope_type: str
+    container_tag: str

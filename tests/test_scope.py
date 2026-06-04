@@ -1,7 +1,6 @@
-import re
 import unittest
 
-from scope import build_scope_from_event
+from scope import build_scope_from_event, build_scopes_from_event
 
 
 class FakeEvent:
@@ -33,33 +32,43 @@ class ScopeTests(unittest.TestCase):
         self.assertNotIn("alice", scope.container_tag)
         self.assertNotIn("alice", str(scope.metadata))
 
-    def test_group_scope_has_member_and_public_containers(self):
+    def test_group_scope_uses_current_member_as_primary_scope(self):
         scope = build_scope_from_event(
             FakeEvent(group="group-1", umo="telegram:group:group-1"), "salt"
         )
 
-        self.assertEqual(scope.scope_type, "group")
+        self.assertEqual(scope.scope_type, "group_member")
         self.assertTrue(scope.container_tag.startswith("astrbot_group_member_telegram_"))
-        self.assertTrue(scope.group_container_tag.startswith("astrbot_group_shared_telegram_"))
-        self.assertNotEqual(scope.container_tag, scope.group_container_tag)
         self.assertNotIn("group-1", scope.container_tag)
-        self.assertNotIn("group-1", scope.group_container_tag)
         self.assertNotIn("alice", scope.container_tag)
-        self.assertNotIn("alice", scope.group_container_tag)
         self.assertNotIn("group-1", str(scope.metadata))
         self.assertEqual(scope.metadata["scope"], "group_member")
-        self.assertEqual(scope.group_metadata["scope"], "group_shared")
+
+    def test_group_scopes_include_shared_and_member_layers(self):
+        scopes = build_scopes_from_event(
+            FakeEvent(group="group-1", umo="telegram:group:group-1"), "salt"
+        )
+
+        self.assertEqual(scopes.primary.scope_type, "group_member")
+        self.assertEqual([scope.scope_type for scope in scopes.recall_scopes], ["group_shared", "group_member"])
+        self.assertEqual([scope.scope_type for scope in scopes.retain_scopes], ["group_shared", "group_member"])
+        self.assertTrue(scopes.recall_scopes[0].container_tag.startswith("astrbot_group_shared_telegram_"))
+        self.assertTrue(scopes.recall_scopes[1].container_tag.startswith("astrbot_group_member_telegram_"))
+        self.assertNotEqual(scopes.recall_scopes[0].container_tag, scopes.recall_scopes[1].container_tag)
+        self.assertNotIn("group-1", scopes.recall_scopes[0].container_tag)
+        self.assertNotIn("alice", scopes.recall_scopes[0].container_tag)
+        self.assertEqual(scopes.recall_scopes[0].metadata["scope"], "group_shared")
 
     def test_group_members_have_separate_personal_container_and_shared_public_container(self):
-        alice = build_scope_from_event(
+        alice_scopes = build_scopes_from_event(
             FakeEvent(sender="alice", group="group-1", umo="telegram:group:group-1"), "salt"
         )
-        bob = build_scope_from_event(
+        bob_scopes = build_scopes_from_event(
             FakeEvent(sender="bob", group="group-1", umo="telegram:group:group-1"), "salt"
         )
 
-        self.assertNotEqual(alice.container_tag, bob.container_tag)
-        self.assertEqual(alice.group_container_tag, bob.group_container_tag)
+        self.assertNotEqual(alice_scopes.primary.container_tag, bob_scopes.primary.container_tag)
+        self.assertEqual(alice_scopes.recall_scopes[0].container_tag, bob_scopes.recall_scopes[0].container_tag)
 
     def test_private_and_group_scope_are_different(self):
         private = build_scope_from_event(FakeEvent(), "salt")
@@ -81,7 +90,7 @@ class ScopeTests(unittest.TestCase):
     def test_platform_is_sanitized(self):
         scope = build_scope_from_event(FakeEvent(platform="qq official/webhook"), "salt")
 
-        self.assertTrue(re.match(r"^[A-Za-z0-9_:-]+$", scope.container_tag))
+        self.assertRegex(scope.container_tag, r"^[A-Za-z0-9_:-]+$")
         self.assertIn("qq_official_webhook", scope.container_tag)
 
 

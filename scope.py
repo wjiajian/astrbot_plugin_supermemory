@@ -19,41 +19,52 @@ class MemoryScope:
     container_tag: str
     scope_key: str
     metadata: dict[str, Any]
-    group_container_tag: str | None = None
-    group_metadata: dict[str, Any] | None = None
 
 
-def build_scope_from_event(event: Any, salt: str) -> MemoryScope:
-    platform_id = _sanitize_tag_part(_event_value(event, "get_platform_name", "platform_id") or "unknown")
+@dataclass(frozen=True)
+class MemoryScopes:
+    primary: MemoryScope
+    recall_scopes: list[MemoryScope]
+    retain_scopes: list[MemoryScope]
+
+
+def build_scopes_from_event(event: Any, salt: str) -> MemoryScopes:
+    platform_id = _sanitize_tag_value(_event_value(event, "get_platform_name", "platform_id") or "unknown")
     umo = str(getattr(event, "unified_msg_origin", "") or "")
     umo_hash = hash_identifier(salt, "umo", umo or "unknown")
+    sender_id = _sender_id(event) or umo or "unknown"
+    sender_hash = hash_identifier(salt, "sender", str(sender_id))
 
     group_id = _event_value(event, "get_group_id", "group_id")
     if group_id:
         group_hash = hash_identifier(salt, "group", str(group_id))
-        sender_id = _event_value(event, "get_sender_id", "sender_id") or _nested_value(
-            event, ("message_obj", "sender", "user_id")
-        )
-        sender_hash = hash_identifier(salt, "sender", str(sender_id or umo or "unknown"))
-        container_tag = _build_container_tag("group_member", platform_id, group_hash, sender_hash, umo_hash)
-        group_container_tag = _build_container_tag("group_shared", platform_id, group_hash, umo_hash)
-        return MemoryScope(
-            scope_type="group",
+        shared_container_tag = _build_container_tag("group_shared", platform_id, group_hash, umo_hash)
+        shared_scope = MemoryScope(
+            scope_type="group_shared",
             platform_id=platform_id,
             umo_hash=umo_hash,
-            container_tag=container_tag,
-            scope_key=container_tag,
-            metadata=_metadata("group_member", platform_id, container_tag),
-            group_container_tag=group_container_tag,
-            group_metadata=_metadata("group_shared", platform_id, group_container_tag),
+            container_tag=shared_container_tag,
+            scope_key=shared_container_tag,
+            metadata=_metadata("group_shared", platform_id, shared_container_tag),
         )
 
-    sender_id = _event_value(event, "get_sender_id", "sender_id") or _nested_value(
-        event, ("message_obj", "sender", "user_id")
-    )
-    sender_hash = hash_identifier(salt, "sender", str(sender_id or umo or "unknown"))
+        member_container_tag = _build_container_tag("group_member", platform_id, group_hash, sender_hash, umo_hash)
+        member_scope = MemoryScope(
+            scope_type="group_member",
+            platform_id=platform_id,
+            umo_hash=umo_hash,
+            container_tag=member_container_tag,
+            scope_key=member_container_tag,
+            metadata=_metadata("group_member", platform_id, member_container_tag),
+        )
+        return MemoryScopes(
+            primary=member_scope,
+            recall_scopes=[shared_scope, member_scope],
+            retain_scopes=[shared_scope, member_scope],
+        )
+
     container_tag = _build_container_tag("private", platform_id, sender_hash, umo_hash)
-    return MemoryScope(
+    private_scope = MemoryScope(
         scope_type="private",
         platform_id=platform_id,
         umo_hash=umo_hash,
@@ -61,6 +72,15 @@ def build_scope_from_event(event: Any, salt: str) -> MemoryScope:
         scope_key=container_tag,
         metadata=_metadata("private", platform_id, container_tag),
     )
+    return MemoryScopes(
+        primary=private_scope,
+        recall_scopes=[private_scope],
+        retain_scopes=[private_scope],
+    )
+
+
+def build_scope_from_event(event: Any, salt: str) -> MemoryScope:
+    return build_scopes_from_event(event, salt).primary
 
 
 def hash_identifier(salt: str, namespace: str, value: str) -> str:
@@ -99,6 +119,12 @@ def _event_value(event: Any, method_name: str, attr_name: str) -> str | None:
     return None
 
 
+def _sender_id(event: Any) -> str | None:
+    return _event_value(event, "get_sender_id", "sender_id") or _nested_value(
+        event, ("message_obj", "sender", "user_id")
+    )
+
+
 def _nested_value(obj: Any, path: tuple[str, ...]) -> str | None:
     current = obj
     for part in path:
@@ -110,6 +136,6 @@ def _nested_value(obj: Any, path: tuple[str, ...]) -> str | None:
     return str(current)
 
 
-def _sanitize_tag_part(value: str) -> str:
+def _sanitize_tag_value(value: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_:-]+", "_", value.strip())
     return normalized.strip("_") or "unknown"

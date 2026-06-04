@@ -7,13 +7,13 @@ DEFAULT_ITEM_MAX_CHARS = 360
 MAX_EXTRACT_DEPTH = 4
 
 
-def format_search_results(
+def format_recall_results(
     raw: Any,
     limit: int,
     item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
     title: str = "memory",
 ) -> str:
-    memories = extract_results(raw)
+    memories = extract_memories(raw)
     if not memories:
         return ""
 
@@ -29,7 +29,7 @@ def format_search_results(
     return f'<supermemory_context scope="{title}">\n' + "\n".join(lines) + "\n</supermemory_context>"
 
 
-def extract_results(raw: Any) -> list[Any]:
+def extract_memories(raw: Any) -> list[Any]:
     if raw is None:
         return []
     if isinstance(raw, list):
@@ -42,6 +42,19 @@ def extract_results(raw: Any) -> list[Any]:
         if isinstance(value, list):
             return value
     return []
+
+
+def format_search_results(
+    raw: Any,
+    limit: int,
+    item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
+    title: str = "memory",
+) -> str:
+    return format_recall_results(raw, limit, item_max_chars, title)
+
+
+def extract_results(raw: Any) -> list[Any]:
+    return extract_memories(raw)
 
 
 def _extract_text(memory: Any, depth: int = 0, seen: set[int] | None = None) -> str:

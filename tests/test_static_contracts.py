@@ -40,11 +40,19 @@ class StaticContractTests(unittest.TestCase):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
 
         self.assertIn('@filter.command_group("supermemory")', main)
-        self.assertIn("group_container_tag", main)
-        self.assertIn("_recall_scope", main)
-        self.assertIn("_retain_scope", main)
+        self.assertIn("build_scopes_from_event", main)
+        self.assertIn("scopes.recall_scopes", main)
+        self.assertIn("scopes.retain_scopes", main)
         for command in ("status", "recall", "on", "off", "help"):
             self.assertIn(f'@supermemory.command("{command}")', main)
+
+    def test_main_uses_config_aware_async_client_factory(self):
+        main = (ROOT / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("async def _client(self) -> SupermemoryClient:", main)
+        self.assertIn("self.supermemory_client_signature", main)
+        self.assertIn("await self.supermemory_client.aclose()", main)
+        self.assertNotIn("self.supermemory_client = SupermemoryClient(\n            api_base=str(self.config.get", main)
 
 
 if __name__ == "__main__":
