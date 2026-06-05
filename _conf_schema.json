@@ -117,9 +117,10 @@
     "_special": "select_provider"
   },
   "retain_ai_fallback_to_current_provider": {
-    "description": "兼容旧配置：所选 AI 判定供应商调用失败时回退到当前会话供应商",
+    "description": "兼容旧配置：",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "所选 AI 记忆供应商调用失败时回退到当前主供应商"
   },
   "retain_ai_min_confidence": {
     "description": "兼容旧配置：AI 写入判定最低置信度",
