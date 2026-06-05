@@ -60,7 +60,17 @@ class SupermemoryClientTests(unittest.IsolatedAsyncioTestCase):
             search_mode="memories",
         )
 
+        self.assertEqual(client.api_base, "https://proxy.example.com/supermemory_api/")
         self.assertEqual(seen[0], "https://proxy.example.com/supermemory_api/v4/search")
+
+    async def test_api_base_trailing_slash_is_preserved(self):
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"results": []})
+
+        client = _client_with_transport(handler, api_base="https://proxy.example.com/supermemory_api/")
+        self.addAsyncCleanup(client.aclose)
+
+        self.assertEqual(client.api_base, "https://proxy.example.com/supermemory_api/")
 
     async def test_ingest_conversation_uses_single_container_tag(self):
         payloads: list[str] = []

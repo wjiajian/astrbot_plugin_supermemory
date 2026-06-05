@@ -41,7 +41,7 @@ class SupermemoryClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS,
     ) -> None:
-        self.api_base = api_base.rstrip("/")
+        self.api_base = api_base if api_base.endswith("/") else api_base + "/"
         self.api_key = api_key.strip()
         self.timeout = httpx.Timeout(float(timeout_seconds))
         self.transport = transport
