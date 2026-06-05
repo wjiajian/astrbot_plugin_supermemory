@@ -65,7 +65,7 @@ class SupermemoryClient:
             "threshold": _clamp_threshold(threshold),
             "searchMode": _normalize_search_mode(search_mode),
         }
-        return await self._request_json("POST", "/v4/search", retryable=True, json=payload)
+        return await self._request_json("POST", "v4/search", retryable=True, json=payload)
 
     async def ingest_conversation(
         self,
@@ -82,7 +82,7 @@ class SupermemoryClient:
         }
         if metadata:
             payload["metadata"] = metadata
-        return await self._request_json("POST", "/v4/conversations", retryable=False, json=payload)
+        return await self._request_json("POST", "v4/conversations", retryable=False, json=payload)
 
     async def check_status(self, container_tag: str) -> SupermemoryStatus:
         try:

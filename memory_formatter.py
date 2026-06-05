@@ -12,6 +12,7 @@ def format_recall_results(
     limit: int,
     item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
     title: str = "memory",
+    max_extract_depth: int = MAX_EXTRACT_DEPTH,
 ) -> str:
     memories = extract_memories(raw)
     if not memories:
@@ -19,7 +20,7 @@ def format_recall_results(
 
     lines: list[str] = []
     for memory in memories[: max(0, limit)]:
-        text = _extract_text(memory)
+        text = _extract_text(memory, max_depth=max_extract_depth)
         if not text:
             continue
         lines.append(f"- {_truncate(_normalize_text(text), item_max_chars)}")
@@ -44,13 +45,13 @@ def extract_memories(raw: Any) -> list[Any]:
     return []
 
 
-def extract_memory_texts(raw: Any, limit: int = 0) -> list[str]:
+def extract_memory_texts(raw: Any, limit: int = 0, max_extract_depth: int = MAX_EXTRACT_DEPTH) -> list[str]:
     memories = extract_memories(raw)
     if limit > 0:
         memories = memories[:limit]
     texts: list[str] = []
     for memory in memories:
-        text = _extract_text(memory)
+        text = _extract_text(memory, max_depth=max_extract_depth)
         if text:
             texts.append(_normalize_text(text))
     return texts
@@ -61,16 +62,22 @@ def format_search_results(
     limit: int,
     item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
     title: str = "memory",
+    max_extract_depth: int = MAX_EXTRACT_DEPTH,
 ) -> str:
-    return format_recall_results(raw, limit, item_max_chars, title)
+    return format_recall_results(raw, limit, item_max_chars, title, max_extract_depth)
 
 
 def extract_results(raw: Any) -> list[Any]:
     return extract_memories(raw)
 
 
-def _extract_text(memory: Any, depth: int = 0, seen: set[int] | None = None) -> str:
-    if depth > MAX_EXTRACT_DEPTH:
+def _extract_text(
+    memory: Any,
+    depth: int = 0,
+    seen: set[int] | None = None,
+    max_depth: int = MAX_EXTRACT_DEPTH,
+) -> str:
+    if depth > max_depth:
         return ""
     if isinstance(memory, str):
         return memory
@@ -92,7 +99,7 @@ def _extract_text(memory: Any, depth: int = 0, seen: set[int] | None = None) -> 
     for key in ("memory", "observation", "document", "result"):
         nested = memory.get(key)
         if isinstance(nested, dict):
-            text = _extract_text(nested, depth + 1, seen)
+            text = _extract_text(nested, depth + 1, seen, max_depth)
             if text:
                 return text
 

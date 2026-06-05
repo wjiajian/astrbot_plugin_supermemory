@@ -42,6 +42,26 @@ class SupermemoryClientTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_api_base_subpath_is_preserved(self):
+        seen: list[str] = []
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(str(request.url))
+            return httpx.Response(200, json={"results": []})
+
+        client = _client_with_transport(handler, api_base="https://proxy.example.com/supermemory_api")
+        self.addAsyncCleanup(client.aclose)
+
+        await client.search(
+            query="hello",
+            container_tag="astrbot_private_x",
+            limit=1,
+            threshold=0.6,
+            search_mode="memories",
+        )
+
+        self.assertEqual(seen[0], "https://proxy.example.com/supermemory_api/v4/search")
+
     async def test_ingest_conversation_uses_single_container_tag(self):
         payloads: list[str] = []
 

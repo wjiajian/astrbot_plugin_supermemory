@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterable, Awaitable, Iterable
 from datetime import datetime, timezone
-from typing import Any
+import inspect
+from typing import Any, Protocol, TypeVar
 import uuid
 
 from astrbot.api import AstrBotConfig, logger
@@ -20,11 +22,21 @@ from .retention_policy import (
     dedupe_action,
     should_write_raw_conversation,
 )
-from .scope import MemoryScope, MemoryScopes, build_scopes_from_event
+from .scope import MemoryScope, MemoryScopes, MissingScopeIdentityError, build_scopes_from_event
 from .supermemory_client import SupermemoryClient, SupermemoryClientError
 
 
 PLUGIN_NAME = "astrbot_plugin_supermemory"
+T = TypeVar("T")
+
+
+class ConfigLike(Protocol):
+    def get(self, key: str, default: object = None) -> object:
+        ...
+
+
+class TextResponseLike(Protocol):
+    completion_text: str
 
 
 class SupermemoryPlugin(Star):
@@ -46,6 +58,8 @@ class SupermemoryPlugin(Star):
         if not self._base_enabled():
             return
         scopes = self._scopes(event)
+        if scopes is None:
+            return
         if not self._scope_type_enabled(scopes.primary) or not self.store.is_scope_enabled(scopes.primary.scope_key):
             return
         if not self._config_complete():
@@ -60,6 +74,8 @@ class SupermemoryPlugin(Star):
             limit = self._recall_limit()
             threshold = self._search_threshold()
             search_mode = self._search_mode()
+            item_max_chars = self._recall_item_max_chars()
+            max_extract_depth = self._memory_extract_max_depth()
             formatted_parts: list[str] = []
             for recall_scope in self._active_memory_scopes(scopes.recall_scopes):
                 raw = await client.search(
@@ -69,7 +85,13 @@ class SupermemoryPlugin(Star):
                     threshold=threshold,
                     search_mode=search_mode,
                 )
-                formatted = format_recall_results(raw, limit=limit, title=recall_scope.scope_type)
+                formatted = format_recall_results(
+                    raw,
+                    limit=limit,
+                    item_max_chars=item_max_chars,
+                    title=recall_scope.scope_type,
+                    max_extract_depth=max_extract_depth,
+                )
                 if formatted:
                     formatted_parts.append(formatted)
             formatted = "\n".join(formatted_parts)
@@ -90,6 +112,8 @@ class SupermemoryPlugin(Star):
         if not self._base_enabled() or not _bool_config(self.config, "retain_enabled", True):
             return
         scopes = self._scopes(event)
+        if scopes is None:
+            return
         if not self._scope_type_enabled(scopes.primary) or not self.store.is_scope_enabled(scopes.primary.scope_key):
             return
         if not self._config_complete():
@@ -133,6 +157,9 @@ class SupermemoryPlugin(Star):
     async def supermemory_status(self, event: AstrMessageEvent):
         """检查 Supermemory 配置和连接状态。"""
         scopes = self._scopes(event)
+        if scopes is None:
+            yield event.plain_result("无法确定当前会话 scope，已跳过 Supermemory 状态检查。")
+            return
         scope = scopes.primary
         lines = [
             "Supermemory 状态",
@@ -163,6 +190,9 @@ class SupermemoryPlugin(Star):
             return
 
         scopes = self._scopes(event)
+        if scopes is None:
+            yield event.plain_result("无法确定当前会话 scope，已跳过手动检索。")
+            return
         scope = scopes.primary
         if not self._scope_type_enabled(scope):
             yield event.plain_result(f"当前 {scope.scope_type} scope 的记忆未启用。")
@@ -179,6 +209,8 @@ class SupermemoryPlugin(Star):
                 limit=self._recall_limit(),
                 threshold=self._search_threshold(),
                 search_mode=self._search_mode(),
+                item_max_chars=self._recall_item_max_chars(),
+                max_extract_depth=self._memory_extract_max_depth(),
             )
         except SupermemoryClientError as exc:
             _log_warning(f"Supermemory manual recall failed: {exc}")
@@ -188,21 +220,33 @@ class SupermemoryPlugin(Star):
     @supermemory.command("on")
     async def supermemory_on(self, event: AstrMessageEvent):
         """启用当前会话的 Supermemory 记忆。"""
-        scope = self._scopes(event).primary
+        scopes = self._scopes(event)
+        if scopes is None:
+            yield event.plain_result("无法确定当前会话 scope，未修改 Supermemory 记忆开关。")
+            return
+        scope = scopes.primary
         self.store.set_scope_enabled(scope.scope_key, True)
         yield event.plain_result("已启用当前会话 Supermemory 记忆。")
 
     @supermemory.command("off")
     async def supermemory_off(self, event: AstrMessageEvent):
         """关闭当前会话的 Supermemory 记忆。"""
-        scope = self._scopes(event).primary
+        scopes = self._scopes(event)
+        if scopes is None:
+            yield event.plain_result("无法确定当前会话 scope，未修改 Supermemory 记忆开关。")
+            return
+        scope = scopes.primary
         self.store.set_scope_enabled(scope.scope_key, False)
         yield event.plain_result("已关闭当前会话 Supermemory 记忆。")
 
     @supermemory.command("help")
     async def supermemory_help(self, event: AstrMessageEvent):
         """显示 Supermemory 命令帮助。"""
-        scope = self._scopes(event).primary
+        scopes = self._scopes(event)
+        if scopes is None:
+            yield event.plain_result(build_help_text(None))
+            return
+        scope = scopes.primary
         yield event.plain_result(build_help_text(self.store.is_scope_enabled(scope.scope_key)))
 
     async def _client(self) -> SupermemoryClient:
@@ -229,8 +273,12 @@ class SupermemoryPlugin(Star):
             self._request_timeout_seconds(),
         )
 
-    def _scopes(self, event: AstrMessageEvent) -> MemoryScopes:
-        scopes = build_scopes_from_event(event, self.salt)
+    def _scopes(self, event: AstrMessageEvent) -> MemoryScopes | None:
+        try:
+            scopes = build_scopes_from_event(event, self.salt)
+        except MissingScopeIdentityError as exc:
+            _log_warning(f"Supermemory scope unavailable: {exc}")
+            return None
         if scopes.primary.scope_type == "private" and _event_looks_like_group(event):
             _log_debug("Supermemory scope fallback: group-like event has no group_id; using private scope.")
         return scopes
@@ -246,6 +294,18 @@ class SupermemoryPlugin(Star):
             return max(1, int(self.config.get("recall_limit") or 5))
         except (TypeError, ValueError):
             return 5
+
+    def _recall_item_max_chars(self) -> int:
+        try:
+            return max(1, int(self.config.get("recall_item_max_chars") or 360))
+        except (TypeError, ValueError):
+            return 360
+
+    def _memory_extract_max_depth(self) -> int:
+        try:
+            return max(0, int(self.config.get("memory_extract_max_depth") or 4))
+        except (TypeError, ValueError):
+            return 4
 
     def _request_timeout_seconds(self) -> int:
         try:
@@ -326,7 +386,11 @@ class SupermemoryPlugin(Star):
                 threshold=0.0,
                 search_mode="memories",
             )
-            existing_texts = extract_memory_texts(raw, limit=self._retain_dedupe_limit())
+            existing_texts = extract_memory_texts(
+                raw,
+                limit=self._retain_dedupe_limit(),
+                max_extract_depth=self._memory_extract_max_depth(),
+            )
         except SupermemoryClientError as exc:
             _log_warning(f"Supermemory retain dedupe failed; continue writing: {exc}")
             return "dedupe_failed"
@@ -379,39 +443,68 @@ class SupermemoryPlugin(Star):
         return messages
 
 
-def _event_text(event: Any) -> str:
+def _event_text(event: AstrMessageEvent) -> str:
     return str(getattr(event, "message_str", "") or "").strip()
 
 
-def _response_text(resp: Any) -> str:
+def _response_text(resp: LLMResponse | TextResponseLike | str | bytes | None) -> str:
+    if resp is None:
+        return ""
+    if isinstance(resp, bytes):
+        return resp.decode("utf-8", errors="replace").strip()
+    if isinstance(resp, str):
+        return resp.strip()
     return str(getattr(resp, "completion_text", "") or "").strip()
 
 
-def _event_looks_like_group(event: Any) -> bool:
+def _event_looks_like_group(event: AstrMessageEvent) -> bool:
     method = getattr(event, "get_message_type", None)
     if callable(method):
         try:
             return str(method()).lower() == "group"
-        except (AttributeError, TypeError, ValueError):
+        except TypeError:
             return False
     message_obj = getattr(event, "message_obj", None)
     message_type = getattr(message_obj, "type", None) or getattr(message_obj, "message_type", None)
     return str(message_type).lower() == "group"
 
 
-def _temporary_text_part(text: str) -> Any:
-    try:
-        part = TextPart(text=text)
-    except TypeError:
-        part = TextPart(text)
-    return part.mark_as_temp()
+def _temporary_text_part(text: str) -> TextPart:
+    part = _new_text_part(text)
+    mark_as_temp = getattr(part, "mark_as_temp", None)
+    if not callable(mark_as_temp):
+        raise TypeError("TextPart does not support mark_as_temp()")
+    marked = mark_as_temp()
+    return part if marked is None else marked
+
+
+def _new_text_part(text: str) -> TextPart:
+    signature = inspect.signature(TextPart)
+    parameters = signature.parameters
+    accepts_text_keyword = "text" in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+    if accepts_text_keyword:
+        return TextPart(text=text)
+    accepts_positional_text = any(
+        parameter.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.VAR_POSITIONAL,
+        }
+        for parameter in parameters.values()
+    )
+    if accepts_positional_text:
+        return TextPart(text)
+    raise TypeError("TextPart constructor does not accept a text value")
 
 
 def _messages_text(messages: list[dict[str, str]]) -> str:
     return "\n".join(message.get("content", "") for message in messages if message.get("content"))
 
 
-async def _call_ai_retention(context: Any, event: Any, prompt: str, config: Any) -> str:
+async def _call_ai_retention(context: Context, event: AstrMessageEvent, prompt: str, config: ConfigLike) -> str:
     provider_id = await _resolve_ai_provider_id(context, event, config)
     if not provider_id:
         raise RuntimeError("no AI retention provider selected")
@@ -429,7 +522,7 @@ async def _call_ai_retention(context: Any, event: Any, prompt: str, config: Any)
         return await _llm_generate_text(context, fallback_provider_id, prompt)
 
 
-async def _llm_generate_text(context: Any, provider_id: str, prompt: str) -> str:
+async def _llm_generate_text(context: Context, provider_id: str, prompt: str) -> str:
     llm_generate = getattr(context, "llm_generate", None)
     if not callable(llm_generate):
         raise RuntimeError("AstrBot context does not support llm_generate")
@@ -442,7 +535,7 @@ async def _llm_generate_text(context: Any, provider_id: str, prompt: str) -> str
     for kwargs in attempts:
         try:
             response = await _maybe_await(llm_generate(**kwargs))
-            response_text = _response_text(response) or str(response or "")
+            response_text = await _generated_text(response)
             if response_text.strip():
                 return response_text
         except TypeError as exc:
@@ -451,14 +544,14 @@ async def _llm_generate_text(context: Any, provider_id: str, prompt: str) -> str
     raise RuntimeError(f"llm_generate call failed: {last_error}")
 
 
-async def _resolve_ai_provider_id(context: Any, event: Any, config: Any) -> str:
+async def _resolve_ai_provider_id(context: Context, event: AstrMessageEvent, config: ConfigLike) -> str:
     selected_provider_id = str(config.get("retain_ai_provider_id") or "").strip()
     if selected_provider_id:
         return selected_provider_id
     return await _current_chat_provider_id(context, event)
 
 
-async def _current_chat_provider_id(context: Any, event: Any) -> str:
+async def _current_chat_provider_id(context: Context, event: AstrMessageEvent) -> str:
     umo = str(getattr(event, "unified_msg_origin", "") or "")
     method = getattr(context, "get_current_chat_provider_id", None)
     if not callable(method):
@@ -470,10 +563,31 @@ async def _current_chat_provider_id(context: Any, event: Any) -> str:
     return str(await _maybe_await(provider_id) or "").strip()
 
 
-async def _maybe_await(value: Any) -> Any:
-    if hasattr(value, "__await__"):
+async def _maybe_await(value: Awaitable[T] | T) -> T:
+    if inspect.isawaitable(value):
         return await value
     return value
+
+
+async def _generated_text(response: object) -> str:
+    response_text = _response_text(response)
+    if response_text:
+        return response_text
+    if isinstance(response, AsyncIterable):
+        chunks: list[str] = []
+        async for chunk in response:
+            chunk_text = await _generated_text(chunk)
+            if chunk_text:
+                chunks.append(chunk_text)
+        return "".join(chunks).strip()
+    if isinstance(response, Iterable) and not isinstance(response, (str, bytes, bytearray, dict)):
+        chunks = []
+        for chunk in response:
+            chunk_text = _response_text(chunk)
+            if chunk_text:
+                chunks.append(chunk_text)
+        return "".join(chunks).strip()
+    return str(response or "").strip()
 
 
 def _conversation_id(container_tag: str, layer: str) -> str:
@@ -488,7 +602,7 @@ def _find_scope(scopes: list[MemoryScope], scope_type: str) -> MemoryScope | Non
     return None
 
 
-def _bool_config(config: Any, key: str, default: bool) -> bool:
+def _bool_config(config: ConfigLike, key: str, default: bool) -> bool:
     value = config.get(key, default)
     if isinstance(value, bool):
         return value

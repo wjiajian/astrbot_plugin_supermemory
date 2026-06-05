@@ -4,11 +4,12 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import secrets
+import uuid
 from typing import TYPE_CHECKING, Protocol, Sequence
 
 from astrbot.api import logger
 
-from .memory_formatter import format_recall_results
+from .memory_formatter import DEFAULT_ITEM_MAX_CHARS, MAX_EXTRACT_DEPTH, format_recall_results
 
 if TYPE_CHECKING:
     from .supermemory_client import SupermemoryClient
@@ -74,9 +75,13 @@ class PluginStateStore:
 
     def _save_state(self, state: ScopeSwitchState) -> None:
         payload = {"disabled_scopes": sorted(state.disabled_scopes)}
-        tmp_path = self.state_path.with_suffix(".tmp")
-        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp_path.replace(self.state_path)
+        tmp_path = self.state_path.with_name(f"{self.state_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            tmp_path.replace(self.state_path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
 
 
 def build_help_text(scope_enabled: bool | None = None) -> str:
@@ -102,6 +107,8 @@ async def run_manual_recall(
     threshold: float,
     search_mode: str,
     title: str = "memory",
+    item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
+    max_extract_depth: int = MAX_EXTRACT_DEPTH,
 ) -> str:
     return await run_manual_recall_for_scopes(
         client,
@@ -115,6 +122,8 @@ async def run_manual_recall(
         limit=limit,
         threshold=threshold,
         search_mode=search_mode,
+        item_max_chars=item_max_chars,
+        max_extract_depth=max_extract_depth,
     )
 
 
@@ -126,6 +135,8 @@ async def run_manual_recall_for_scopes(
     limit: int,
     threshold: float,
     search_mode: str,
+    item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
+    max_extract_depth: int = MAX_EXTRACT_DEPTH,
 ) -> str:
     formatted_parts: list[str] = []
     for scope in scopes:
@@ -136,7 +147,13 @@ async def run_manual_recall_for_scopes(
             threshold=threshold,
             search_mode=search_mode,
         )
-        formatted = format_recall_results(raw, limit=limit, title=scope.scope_type)
+        formatted = format_recall_results(
+            raw,
+            limit=limit,
+            item_max_chars=item_max_chars,
+            title=scope.scope_type,
+            max_extract_depth=max_extract_depth,
+        )
         if formatted:
             formatted_parts.append(formatted)
 

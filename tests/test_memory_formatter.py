@@ -30,6 +30,12 @@ class MemoryFormatterTests(unittest.TestCase):
 
         self.assertIn("- Nested fact", formatted)
 
+    def test_max_extract_depth_can_be_configured(self):
+        raw = {"results": [{"observation": {"result": {"content": "Nested too deep by default"}}}]}
+
+        self.assertEqual(format_recall_results(raw, limit=5, max_extract_depth=1), "")
+        self.assertIn("Nested too deep by default", format_recall_results(raw, limit=5, max_extract_depth=2))
+
     def test_limits_count_and_truncates_text(self):
         formatted = format_recall_results(
             {"results": [{"memory": "a" * 20}, {"memory": "second"}]},

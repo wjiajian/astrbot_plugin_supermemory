@@ -273,16 +273,19 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
         raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
         raw = re.sub(r"\s*```$", "", raw)
     decoder = json.JSONDecoder()
-    for index, char in enumerate(raw):
-        if char != "{":
-            continue
+    start = 0
+    while True:
+        index = raw.find("{", start)
+        if index < 0:
+            return None
         try:
-            data, _ = decoder.raw_decode(raw[index:])
+            data, _ = decoder.raw_decode(raw, index)
         except json.JSONDecodeError:
+            start = index + 1
             continue
         if isinstance(data, dict):
             return data
-    return None
+        start = index + 1
 
 
 def _is_command(text: str) -> bool:
@@ -328,7 +331,7 @@ def _has_explicit_memory_intent(text: str) -> bool:
         r"记住",
         r"请记",
         r"帮我记",
-        r"以后.*(叫我|称呼|不要|别|用|回复)",
+        r"以后.{0,120}?(叫我|称呼|不要|别|用|回复)",
         r"叫我",
         r"称呼我",
         r"我的偏好",
@@ -347,8 +350,8 @@ def _has_explicit_memory_intent(text: str) -> bool:
         r"\bi prefer\b",
         r"\bi like\b",
         r"\bi don'?t like\b",
-        r"do not .* again",
-        r"don'?t .* again",
+        r"do not .{0,120}? again",
+        r"don'?t .{0,120}? again",
     )
     return any(re.search(pattern, lowered) for pattern in patterns)
 
@@ -365,11 +368,11 @@ def _has_stable_fact(text: str) -> bool:
         r"群规",
         r"规则是",
         r"约定是",
-        r"项目.*(使用|采用|是|叫)",
-        r"仓库.*(使用|采用|是|叫)",
+        r"项目.{0,120}?(使用|采用|是|叫)",
+        r"仓库.{0,120}?(使用|采用|是|叫)",
         r"技术栈",
-        r"不是.*是",
-        r"不对.*是",
+        r"不是.{0,120}?是",
+        r"不对.{0,120}?是",
         r"纠正",
         r"\bmy name is\b",
         r"\bcall me\b",
@@ -410,9 +413,9 @@ def _assistant_is_non_retainable(text: str) -> bool:
         return False
     lowered = text.lower()
     patterns = (
-        r"抱歉.*(无法|不能|做不到)",
-        r"无法.*(完成|处理|回答|提供)",
-        r"不能.*(完成|处理|回答|提供)",
+        r"抱歉.{0,120}?(无法|不能|做不到)",
+        r"无法.{0,120}?(完成|处理|回答|提供)",
+        r"不能.{0,120}?(完成|处理|回答|提供)",
         r"出错",
         r"失败",
         r"错误",
@@ -494,7 +497,7 @@ def _is_personal_fact(text: str) -> bool:
 
 def _memory_type(text: str) -> str:
     lowered = text.lower()
-    if re.search(r"不是.*是|不对.*是|纠正|\bactually\b|\bcorrection\b", lowered):
+    if re.search(r"不是.{0,120}?是|不对.{0,120}?是|纠正|\bactually\b|\bcorrection\b", lowered):
         return "correction"
     if re.search(r"群规|规则|约定|公告|rule|agreement|announcement", lowered):
         return "rule"

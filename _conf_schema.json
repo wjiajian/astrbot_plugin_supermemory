@@ -36,6 +36,16 @@
     "type": "int",
     "default": 5
   },
+  "recall_item_max_chars": {
+    "description": "每条召回记忆注入前的最大字符数",
+    "type": "int",
+    "default": 360
+  },
+  "memory_extract_max_depth": {
+    "description": "解析召回结果嵌套结构的最大深度",
+    "type": "int",
+    "default": 4
+  },
   "search_threshold": {
     "description": "Supermemory 搜索阈值，0 返回更多结果，1 更严格",
     "type": "float",

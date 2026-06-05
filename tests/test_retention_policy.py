@@ -95,6 +95,20 @@ class RetentionPolicyTests(unittest.TestCase):
         self.assertFalse(decision.should_retain)
         self.assertEqual(decision.reason, "ai_low_confidence")
 
+    def test_ai_json_object_can_follow_noisy_prefix(self):
+        base = _decide("记住我喜欢简洁回答")
+        decision = apply_ai_retention_result(
+            base,
+            'noise before json {bad} {"should_retain": true, "memory_text": "用户喜欢简洁回答。", '
+            '"scope": "private", "confidence": 0.9, "reason": "preference", "sensitivity": "low"}',
+            "private",
+            {},
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertTrue(decision.should_retain)
+        self.assertEqual(decision.memory_text, "用户喜欢简洁回答。")
+
     def test_dedupe_action_skips_duplicate_but_keeps_correction(self):
         self.assertEqual(
             dedupe_action("用户喜欢简洁回答", ["用户喜欢简洁回答。"], 0.85, "preference"),

@@ -11,6 +11,10 @@ MAX_CONTAINER_TAG_LENGTH = 100
 MAX_PLATFORM_LENGTH = 24
 
 
+class MissingScopeIdentityError(ValueError):
+    """Raised when an event cannot be mapped to an isolated memory scope."""
+
+
 @dataclass(frozen=True)
 class MemoryScope:
     scope_type: str
@@ -32,10 +36,14 @@ def build_scopes_from_event(event: Any, salt: str) -> MemoryScopes:
     platform_id = _sanitize_tag_value(_event_value(event, "get_platform_name", "platform_id") or "unknown")
     umo = str(getattr(event, "unified_msg_origin", "") or "")
     umo_hash = hash_identifier(salt, "umo", umo or "unknown")
-    sender_id = _sender_id(event) or umo or "unknown"
-    sender_hash = hash_identifier(salt, "sender", str(sender_id))
-
     group_id = _event_value(event, "get_group_id", "group_id")
+    sender_id = _sender_id(event)
+    if group_id and not sender_id:
+        raise MissingScopeIdentityError("group event is missing sender_id; refuse to build group_member scope")
+    if not sender_id and not umo:
+        raise MissingScopeIdentityError("event is missing sender_id and unified_msg_origin; refuse unknown memory scope")
+
+    sender_hash = hash_identifier(salt, "sender", str(sender_id or umo))
     if group_id:
         group_hash = hash_identifier(salt, "group", str(group_id))
         shared_container_tag = _build_container_tag("group_shared", platform_id, group_hash, umo_hash)
@@ -108,7 +116,7 @@ def _event_value(event: Any, method_name: str, attr_name: str) -> str | None:
     if callable(method):
         try:
             value = method()
-        except (AttributeError, TypeError, ValueError):
+        except TypeError:
             value = None
         if value not in (None, ""):
             return str(value)
