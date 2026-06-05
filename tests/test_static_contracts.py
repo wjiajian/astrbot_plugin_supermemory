@@ -34,6 +34,10 @@ class StaticContractTests(unittest.TestCase):
             "retain_decision_mode",
             "retain_min_chars",
             "retain_sensitive_requires_explicit",
+            "memory_ai_enabled",
+            "memory_ai_provider_id",
+            "memory_ai_fallback_to_current_provider",
+            "memory_ai_min_confidence",
             "retain_ai_enabled",
             "retain_ai_provider_id",
             "retain_ai_fallback_to_current_provider",
@@ -54,6 +58,11 @@ class StaticContractTests(unittest.TestCase):
         self.assertEqual(config["retain_decision_mode"]["default"], "balanced")
         self.assertEqual(config["retain_min_chars"]["default"], 8)
         self.assertIs(config["retain_sensitive_requires_explicit"]["default"], True)
+        self.assertIs(config["memory_ai_enabled"]["default"], False)
+        self.assertEqual(config["memory_ai_provider_id"]["default"], "")
+        self.assertEqual(config["memory_ai_provider_id"]["_special"], "select_provider")
+        self.assertIs(config["memory_ai_fallback_to_current_provider"]["default"], True)
+        self.assertEqual(config["memory_ai_min_confidence"]["default"], 0.7)
         self.assertIs(config["retain_ai_enabled"]["default"], False)
         self.assertEqual(config["retain_ai_provider_id"]["default"], "")
         self.assertEqual(config["retain_ai_provider_id"]["_special"], "select_provider")
@@ -75,10 +84,14 @@ class StaticContractTests(unittest.TestCase):
         for command in ("status", "recall", "on", "off", "help"):
             self.assertIn(f'@supermemory.command("{command}")', main)
 
-    def test_ai_retention_uses_selectable_llm_provider(self):
+    def test_memory_ai_uses_selectable_llm_provider_and_keeps_legacy_compat(self):
         main = (ROOT / "main.py").read_text(encoding="utf-8")
+        memory_ai = (ROOT / "memory_ai.py").read_text(encoding="utf-8")
 
-        self.assertIn("retain_ai_provider_id", main)
+        self.assertIn("memory_ai_enabled", main)
+        self.assertIn("memory_ai_provider_id", main)
+        self.assertIn("memory_ai_fallback_to_current_provider", main)
+        self.assertIn("retain_ai_provider_id", memory_ai)
         self.assertIn("get_current_chat_provider_id", main)
         self.assertIn("llm_generate", main)
         self.assertIn("chat_provider_id", main)

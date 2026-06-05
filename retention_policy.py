@@ -119,15 +119,52 @@ def build_ai_retention_prompt(user_text: str, assistant_text: str, primary_scope
         '  "should_retain": boolean,\n'
         '  "memory_text": string,\n'
         '  "scope": "private|group_member|group_shared",\n'
+        '  "memory_type": "preference|profile|project|rule|correction|conversation",\n'
         '  "confidence": number,\n'
-        '  "reason": "preference|profile|project|rule|correction|not_memorable|sensitive|duplicate_risk",\n'
-        '  "sensitivity": "low|personal|high"\n'
+        '  "sensitivity": "low|personal|high",\n'
+        '  "reason": "short reason"\n'
         "}\n"
-        "Write memory_text as a concise, standalone fact. Prefer Chinese if the input is Chinese.\n"
+        "Write memory_text as a natural, concise, standalone fact that can be searched later. Prefer Chinese if the input is Chinese.\n"
         "Never retain API keys, tokens, passwords, private keys, or secrets.\n"
+        "Reject temporary chatter, commands, tool output, and assistant failure/refusal text.\n"
         "Use group_shared only for group rules, announcements, or shared project/team facts.\n"
         "Use group_member for a specific user's preferences, name, profile, or personal context.\n"
         f"Input JSON: {json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def precheck_ai_retention(
+    user_text: str,
+    assistant_text: str,
+    primary_scope_type: str,
+    config: Any,
+) -> RetainDecision:
+    user = _clean_text(user_text)
+    assistant = _clean_text(assistant_text)
+    if not user and not assistant:
+        return _skip("empty")
+
+    keep_user = _bool_config(config, "retain_user_message", True) and bool(user)
+    keep_assistant = _bool_config(config, "retain_assistant_message", True) and bool(assistant)
+    if not keep_user and not keep_assistant:
+        return _skip("disabled_content")
+
+    combined = "\n".join(part for part in (user, assistant) if part)
+    if _has_hard_sensitive_secret(combined):
+        return _skip("hard_sensitive", sensitivity="high")
+    if _is_command(user):
+        return _skip("command")
+
+    sensitivity = "personal" if _has_personal_sensitive(user) else "low"
+    return RetainDecision(
+        should_retain=True,
+        reason="ai_candidate",
+        sensitivity=sensitivity,
+        keep_user=keep_user,
+        keep_assistant=keep_assistant,
+        target_scope_types=_target_scope_types(primary_scope_type, user, broad=False),
+        memory_type="conversation",
+        source="ai",
     )
 
 
@@ -153,12 +190,9 @@ def apply_ai_retention_result(
         return _skip("ai_empty_memory_text", sensitivity=sensitivity)
     if _has_hard_sensitive_secret(memory_text):
         return _skip("hard_sensitive", sensitivity="high")
-    if _has_personal_sensitive(memory_text) and _bool_config(config, "retain_sensitive_requires_explicit", True):
-        if base_decision.reason != "explicit_memory":
-            return _skip("personal_sensitive_requires_explicit", sensitivity="personal")
 
     target_scope_types = _ai_target_scope_types(data.get("scope"), primary_scope_type, base_decision.target_scope_types)
-    memory_type = _normalize_memory_type(data.get("reason"), base_decision.memory_type)
+    memory_type = _normalize_memory_type(data.get("memory_type", data.get("reason")), base_decision.memory_type)
     return RetainDecision(
         should_retain=True,
         reason=f"ai_{memory_type}",
@@ -232,6 +266,11 @@ def _retain_min_chars(config: Any) -> int:
 
 
 def _ai_min_confidence(config: Any) -> float:
+    if _has_config_key(config, "memory_ai_min_confidence"):
+        return _clamp_float(
+            _config_get(config, "memory_ai_min_confidence", DEFAULT_AI_MIN_CONFIDENCE),
+            DEFAULT_AI_MIN_CONFIDENCE,
+        )
     return _clamp_float(_config_get(config, "retain_ai_min_confidence", DEFAULT_AI_MIN_CONFIDENCE), DEFAULT_AI_MIN_CONFIDENCE)
 
 
@@ -240,6 +279,12 @@ def _config_get(config: Any, key: str, default: Any) -> Any:
     if callable(getter):
         return getter(key, default)
     return default
+
+
+def _has_config_key(config: Any, key: str) -> bool:
+    if isinstance(config, dict):
+        return key in config
+    return hasattr(config, key)
 
 
 def _bool_config(config: Any, key: str, default: bool) -> bool:

@@ -5,11 +5,11 @@ from pathlib import Path
 import json
 import secrets
 import uuid
-from typing import TYPE_CHECKING, Protocol, Sequence
+from typing import Any, TYPE_CHECKING, Protocol, Sequence
 
 from astrbot.api import logger
 
-from .memory_formatter import DEFAULT_ITEM_MAX_CHARS, MAX_EXTRACT_DEPTH, format_recall_results
+from .memory_formatter import DEFAULT_ITEM_MAX_CHARS, MAX_EXTRACT_DEPTH, dedupe_memories, extract_memories, format_recall_results
 
 if TYPE_CHECKING:
     from .supermemory_client import SupermemoryClient
@@ -109,6 +109,7 @@ async def run_manual_recall(
     title: str = "memory",
     item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
     max_extract_depth: int = MAX_EXTRACT_DEPTH,
+    queries: Sequence[str] | None = None,
 ) -> str:
     return await run_manual_recall_for_scopes(
         client,
@@ -124,6 +125,7 @@ async def run_manual_recall(
         search_mode=search_mode,
         item_max_chars=item_max_chars,
         max_extract_depth=max_extract_depth,
+        queries=queries,
     )
 
 
@@ -137,18 +139,25 @@ async def run_manual_recall_for_scopes(
     search_mode: str,
     item_max_chars: int = DEFAULT_ITEM_MAX_CHARS,
     max_extract_depth: int = MAX_EXTRACT_DEPTH,
+    queries: Sequence[str] | None = None,
+    empty_message: str = "当前会话 scope 下没有召回到相关记忆。",
 ) -> str:
     formatted_parts: list[str] = []
+    recall_queries = _recall_queries(query, queries)
     for scope in scopes:
-        raw = await client.search(
-            query=query,
-            container_tag=scope.container_tag,
-            limit=limit,
-            threshold=threshold,
-            search_mode=search_mode,
-        )
+        memories: list[Any] = []
+        for recall_query in recall_queries:
+            raw = await client.search(
+                query=recall_query,
+                container_tag=scope.container_tag,
+                limit=limit,
+                threshold=threshold,
+                search_mode=search_mode,
+            )
+            memories.extend(extract_memories(raw))
+        memories = dedupe_memories(memories, max_extract_depth=max_extract_depth)
         formatted = format_recall_results(
-            raw,
+            memories,
             limit=limit,
             item_max_chars=item_max_chars,
             title=scope.scope_type,
@@ -158,8 +167,23 @@ async def run_manual_recall_for_scopes(
             formatted_parts.append(formatted)
 
     if not formatted_parts:
-        return "当前会话 scope 下没有召回到相关记忆。"
+        return empty_message
     return "\n".join(formatted_parts)
+
+
+def _recall_queries(query: str, queries: Sequence[str] | None) -> list[str]:
+    values = list(queries or [])
+    if query not in values:
+        values.insert(0, query)
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 @dataclass(frozen=True)

@@ -80,25 +80,49 @@
     "default": true,
     "hint": "开启后包含敏感信息的消息需要用户明确要求记住（如回复“记住”）才会写入 Supermemory。"
   },
-  "retain_ai_enabled": {
-    "description": "启用 AI 写入判定和记忆萃取；会额外调用当前 LLM Provider",
+  "memory_ai_enabled": {
+    "description": "启用 AI 记忆分析和召回拓展",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "开启后，写入判定和召回查询拓展都会额外调用 LLM。建议为 memory_ai_provider_id 选择便宜、快速的小模型。"
   },
-  "retain_ai_provider_id": {
-    "description": "AI 写入判定使用的 AstrBot LLM 供应商",
+  "memory_ai_provider_id": {
+    "description": "AI 记忆分析使用的 AstrBot LLM 供应商",
     "type": "string",
     "default": "",
-    "hint": "留空时使用当前会话的 LLM 供应商；选择后固定使用所选供应商执行记忆判定。",
+    "hint": "推荐选择小模型；留空时使用当前会话的 LLM 供应商。",
+    "_special": "select_provider"
+  },
+  "memory_ai_fallback_to_current_provider": {
+    "description": "所选 AI 记忆供应商调用失败时回退到当前会话供应商",
+    "type": "bool",
+    "default": true
+  },
+  "memory_ai_min_confidence": {
+    "description": "AI 写入判定最低置信度，低于该值则跳过写入",
+    "type": "float",
+    "default": 0.7
+  },
+  "retain_ai_enabled": {
+    "description": "兼容旧配置：启用 AI 写入判定和记忆萃取",
+    "type": "bool",
+    "default": false,
+    "hint": "推荐改用 memory_ai_enabled；仅当 memory_ai_enabled 不存在时作为兼容旧配置读取。"
+  },
+  "retain_ai_provider_id": {
+    "description": "兼容旧配置：AI 写入判定使用的 AstrBot LLM 供应商",
+    "type": "string",
+    "default": "",
+    "hint": "推荐改用 memory_ai_provider_id。",
     "_special": "select_provider"
   },
   "retain_ai_fallback_to_current_provider": {
-    "description": "所选 AI 判定供应商调用失败时回退到当前会话供应商",
+    "description": "兼容旧配置：所选 AI 判定供应商调用失败时回退到当前会话供应商",
     "type": "bool",
     "default": false
   },
   "retain_ai_min_confidence": {
-    "description": "AI 写入判定最低置信度，低于该值则跳过写入",
+    "description": "兼容旧配置：AI 写入判定最低置信度",
     "type": "float",
     "default": 0.7
   },

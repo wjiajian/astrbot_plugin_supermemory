@@ -57,6 +57,19 @@ def extract_memory_texts(raw: Any, limit: int = 0, max_extract_depth: int = MAX_
     return texts
 
 
+def dedupe_memories(memories: list[Any], max_extract_depth: int = MAX_EXTRACT_DEPTH) -> list[Any]:
+    seen: set[str] = set()
+    deduped: list[Any] = []
+    for memory in memories:
+        text = _extract_text(memory, max_depth=max_extract_depth)
+        key = _normalize_text(text).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(memory)
+    return deduped
+
+
 def format_search_results(
     raw: Any,
     limit: int,

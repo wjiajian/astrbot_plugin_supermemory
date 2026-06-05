@@ -1,6 +1,6 @@
 import unittest
 
-from retention_policy import apply_ai_retention_result, dedupe_action, decide_retention
+from retention_policy import apply_ai_retention_result, dedupe_action, decide_retention, precheck_ai_retention
 
 
 class RetentionPolicyTests(unittest.TestCase):
@@ -56,6 +56,24 @@ class RetentionPolicyTests(unittest.TestCase):
                 self.assertFalse(decision.should_retain)
                 self.assertEqual(decision.reason, "hard_sensitive")
 
+    def test_ai_precheck_allows_normal_candidates_without_rule_classification(self):
+        decision = precheck_ai_retention(
+            "下午把订单同步模块迁到了 Celery worker",
+            "好的",
+            "private",
+            {},
+        )
+
+        self.assertTrue(decision.should_retain)
+        self.assertEqual(decision.reason, "ai_candidate")
+        self.assertEqual(decision.source, "ai")
+
+    def test_ai_precheck_still_blocks_hard_sensitive_secrets(self):
+        decision = precheck_ai_retention("我的 token 是 abc123456789", "", "private", {})
+
+        self.assertFalse(decision.should_retain)
+        self.assertEqual(decision.reason, "hard_sensitive")
+
     def test_personal_sensitive_requires_explicit_memory_intent(self):
         implicit = _decide("我的邮箱是 alice@example.com")
         explicit = _decide("记住我的邮箱是 alice@example.com")
@@ -81,6 +99,36 @@ class RetentionPolicyTests(unittest.TestCase):
         self.assertEqual(decision.target_scope_types, ("group_shared",))
         self.assertEqual(decision.source, "ai")
 
+    def test_ai_result_uses_memory_type_field(self):
+        base = precheck_ai_retention("我们项目使用 Python 3.12", "", "group_member", {})
+        decision = apply_ai_retention_result(
+            base,
+            '{"should_retain": true, "memory_text": "项目使用 Python 3.12。", '
+            '"scope": "group_shared", "memory_type": "project", "confidence": 0.95, '
+            '"reason": "shared technical fact", "sensitivity": "low"}',
+            "group_member",
+            {},
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertTrue(decision.should_retain)
+        self.assertEqual(decision.memory_type, "project")
+        self.assertEqual(decision.reason, "ai_project")
+
+    def test_ai_result_can_reject_retention(self):
+        base = precheck_ai_retention("今天天气不错", "", "private", {})
+        decision = apply_ai_retention_result(
+            base,
+            '{"should_retain": false, "memory_text": "", "scope": "private", '
+            '"memory_type": "conversation", "confidence": 0.99, "sensitivity": "low", "reason": "temporary"}',
+            "private",
+            {},
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertFalse(decision.should_retain)
+        self.assertEqual(decision.reason, "ai_rejected")
+
     def test_ai_low_confidence_skips_retention(self):
         base = _decide("记住我喜欢简洁回答")
         decision = apply_ai_retention_result(
@@ -89,6 +137,20 @@ class RetentionPolicyTests(unittest.TestCase):
             '"scope": "private", "confidence": 0.2, "reason": "preference", "sensitivity": "low"}',
             "private",
             {"retain_ai_min_confidence": 0.7},
+        )
+
+        self.assertIsNotNone(decision)
+        self.assertFalse(decision.should_retain)
+        self.assertEqual(decision.reason, "ai_low_confidence")
+
+    def test_memory_ai_min_confidence_overrides_legacy_threshold(self):
+        base = _decide("记住我喜欢简洁回答")
+        decision = apply_ai_retention_result(
+            base,
+            '{"should_retain": true, "memory_text": "用户喜欢简洁回答。", '
+            '"scope": "private", "memory_type": "preference", "confidence": 0.75, "sensitivity": "low"}',
+            "private",
+            {"memory_ai_min_confidence": 0.8, "retain_ai_min_confidence": 0.1},
         )
 
         self.assertIsNotNone(decision)
@@ -108,6 +170,11 @@ class RetentionPolicyTests(unittest.TestCase):
         self.assertIsNotNone(decision)
         self.assertTrue(decision.should_retain)
         self.assertEqual(decision.memory_text, "用户喜欢简洁回答。")
+
+    def test_invalid_ai_json_returns_none_for_rule_fallback(self):
+        base = _decide("记住我喜欢简洁回答")
+
+        self.assertIsNone(apply_ai_retention_result(base, "not-json", "private", {}))
 
     def test_dedupe_action_skips_duplicate_but_keeps_correction(self):
         self.assertEqual(
