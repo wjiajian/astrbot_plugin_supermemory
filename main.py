@@ -11,7 +11,15 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
 
 from .commands import PluginStateStore, build_help_text, run_manual_recall_for_scopes
-from .memory_formatter import format_recall_results
+from .memory_formatter import extract_memory_texts, format_recall_results
+from .retention_policy import (
+    RetainDecision,
+    apply_ai_retention_result,
+    build_ai_retention_prompt,
+    decide_retention,
+    dedupe_action,
+    should_write_raw_conversation,
+)
 from .scope import MemoryScope, MemoryScopes, build_scopes_from_event
 from .supermemory_client import SupermemoryClient, SupermemoryClientError
 
@@ -22,6 +30,7 @@ PLUGIN_NAME = "astrbot_plugin_supermemory"
 class SupermemoryPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None) -> None:
         super().__init__(context)
+        self._context = context
         self.config = config or {}
         self.store = PluginStateStore(StarTools.get_data_dir())
         self.salt = self.store.get_or_create_salt()
@@ -86,18 +95,32 @@ class SupermemoryPlugin(Star):
         if not self._config_complete():
             return
 
-        messages = self._retain_messages(event, resp)
+        user_text = _event_text(event)
+        assistant_text = _response_text(resp)
+        decision = await self._retention_decision(event, user_text, assistant_text, scopes.primary.scope_type)
+        if not decision.should_retain:
+            _log_debug(f"Supermemory retain skipped: {decision.reason}")
+            return
+
+        messages = self._retain_messages(user_text, assistant_text, decision)
         if not messages:
             return
 
         try:
             client = await self._client()
             for retain_scope in self._active_memory_scopes(scopes.retain_scopes):
+                if retain_scope.scope_type not in decision.target_scope_types:
+                    continue
+                content = _messages_text(messages)
+                retain_action = await self._retain_dedupe_action(client, content, retain_scope, decision)
+                if retain_action == "duplicate":
+                    _log_debug(f"Supermemory retain skipped duplicate: {retain_scope.scope_type}")
+                    continue
                 await client.ingest_conversation(
                     conversation_id=_conversation_id(retain_scope.container_tag, retain_scope.scope_type),
                     messages=messages,
                     container_tag=retain_scope.container_tag,
-                    metadata=retain_scope.metadata,
+                    metadata=self._retain_metadata(retain_scope.metadata, decision, retain_action),
                 )
         except SupermemoryClientError as exc:
             _log_warning(f"Supermemory retain failed: {exc}")
@@ -260,16 +283,99 @@ class SupermemoryPlugin(Star):
     def _active_memory_scopes(self, scopes: list[MemoryScope]) -> list[MemoryScope]:
         return [scope for scope in scopes if self._memory_scope_enabled(scope)]
 
-    def _retain_messages(self, event: AstrMessageEvent, resp: LLMResponse) -> list[dict[str, str]]:
+    async def _retention_decision(
+        self,
+        event: AstrMessageEvent,
+        user_text: str,
+        assistant_text: str,
+        primary_scope_type: str,
+    ) -> RetainDecision:
+        decision = decide_retention(user_text, assistant_text, primary_scope_type, self.config)
+        if not decision.should_retain or decision.reason == "all_mode":
+            return decision
+        if not _bool_config(self.config, "retain_ai_enabled", False):
+            return decision
+
+        prompt = build_ai_retention_prompt(user_text, assistant_text, primary_scope_type)
+        try:
+            response_text = await _call_ai_retention(self._context, event, prompt, self.config)
+        except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+            _log_warning(f"Supermemory AI retention fallback to rules: {exc}")
+            return decision
+
+        ai_decision = apply_ai_retention_result(decision, response_text, primary_scope_type, self.config)
+        if ai_decision is None:
+            _log_warning("Supermemory AI retention returned invalid JSON; fallback to rules.")
+            return decision
+        return ai_decision
+
+    async def _retain_dedupe_action(
+        self,
+        client: SupermemoryClient,
+        content: str,
+        retain_scope: MemoryScope,
+        decision: RetainDecision,
+    ) -> str:
+        if not _bool_config(self.config, "retain_dedupe_enabled", True):
+            return "not_checked"
+        try:
+            raw = await client.search(
+                query=content,
+                container_tag=retain_scope.container_tag,
+                limit=self._retain_dedupe_limit(),
+                threshold=0.0,
+                search_mode="memories",
+            )
+            existing_texts = extract_memory_texts(raw, limit=self._retain_dedupe_limit())
+        except SupermemoryClientError as exc:
+            _log_warning(f"Supermemory retain dedupe failed; continue writing: {exc}")
+            return "dedupe_failed"
+        return dedupe_action(content, existing_texts, self._retain_dedupe_threshold(), decision.memory_type)
+
+    def _retain_dedupe_limit(self) -> int:
+        try:
+            return max(1, int(self.config.get("retain_dedupe_limit") or 5))
+        except (TypeError, ValueError):
+            return 5
+
+    def _retain_dedupe_threshold(self) -> float:
+        try:
+            return min(1.0, max(0.0, float(self.config.get("retain_dedupe_threshold", 0.85))))
+        except (TypeError, ValueError):
+            return 0.85
+
+    def _retain_metadata(
+        self,
+        base_metadata: dict[str, Any],
+        decision: RetainDecision,
+        retain_action: str,
+    ) -> dict[str, Any]:
+        metadata = dict(base_metadata)
+        metadata.update(
+            {
+                "retention_reason": decision.reason,
+                "retention_sensitivity": decision.sensitivity,
+                "retention_type": decision.memory_type,
+                "retention_source": decision.source,
+                "retention_confidence": decision.confidence,
+                "retention_action": retain_action,
+            }
+        )
+        return metadata
+
+    def _retain_messages(
+        self,
+        user_text: str,
+        assistant_text: str,
+        decision: RetainDecision,
+    ) -> list[dict[str, str]]:
+        if decision.memory_text and not should_write_raw_conversation(decision, self.config):
+            return [{"role": "user", "content": decision.memory_text}]
         messages: list[dict[str, str]] = []
-        if _bool_config(self.config, "retain_user_message", True):
-            user_text = _event_text(event)
-            if user_text:
-                messages.append({"role": "user", "content": user_text})
-        if _bool_config(self.config, "retain_assistant_message", True):
-            assistant_text = _response_text(resp)
-            if assistant_text:
-                messages.append({"role": "assistant", "content": assistant_text})
+        if decision.keep_user and _bool_config(self.config, "retain_user_message", True) and user_text:
+            messages.append({"role": "user", "content": user_text})
+        if decision.keep_assistant and _bool_config(self.config, "retain_assistant_message", True) and assistant_text:
+            messages.append({"role": "assistant", "content": assistant_text})
         return messages
 
 
@@ -299,6 +405,75 @@ def _temporary_text_part(text: str) -> Any:
     except TypeError:
         part = TextPart(text)
     return part.mark_as_temp()
+
+
+def _messages_text(messages: list[dict[str, str]]) -> str:
+    return "\n".join(message.get("content", "") for message in messages if message.get("content"))
+
+
+async def _call_ai_retention(context: Any, event: Any, prompt: str, config: Any) -> str:
+    provider_id = await _resolve_ai_provider_id(context, event, config)
+    if not provider_id:
+        raise RuntimeError("no AI retention provider selected")
+
+    selected_provider_id = str(config.get("retain_ai_provider_id") or "").strip()
+    try:
+        return await _llm_generate_text(context, provider_id, prompt)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        if not selected_provider_id or not _bool_config(config, "retain_ai_fallback_to_current_provider", False):
+            raise
+        fallback_provider_id = await _current_chat_provider_id(context, event)
+        if not fallback_provider_id or fallback_provider_id == selected_provider_id:
+            raise
+        _log_warning(f"Supermemory AI retention selected provider failed; fallback to current provider: {exc}")
+        return await _llm_generate_text(context, fallback_provider_id, prompt)
+
+
+async def _llm_generate_text(context: Any, provider_id: str, prompt: str) -> str:
+    llm_generate = getattr(context, "llm_generate", None)
+    if not callable(llm_generate):
+        raise RuntimeError("AstrBot context does not support llm_generate")
+    system_prompt = "You classify chat turns for long-term memory. Return JSON only."
+    attempts = (
+        {"chat_provider_id": provider_id, "prompt": prompt, "system_prompt": system_prompt},
+        {"chat_provider_id": provider_id, "prompt": prompt},
+    )
+    last_error: Exception | None = None
+    for kwargs in attempts:
+        try:
+            response = await _maybe_await(llm_generate(**kwargs))
+            response_text = _response_text(response) or str(response or "")
+            if response_text.strip():
+                return response_text
+        except TypeError as exc:
+            last_error = exc
+            continue
+    raise RuntimeError(f"llm_generate call failed: {last_error}")
+
+
+async def _resolve_ai_provider_id(context: Any, event: Any, config: Any) -> str:
+    selected_provider_id = str(config.get("retain_ai_provider_id") or "").strip()
+    if selected_provider_id:
+        return selected_provider_id
+    return await _current_chat_provider_id(context, event)
+
+
+async def _current_chat_provider_id(context: Any, event: Any) -> str:
+    umo = str(getattr(event, "unified_msg_origin", "") or "")
+    method = getattr(context, "get_current_chat_provider_id", None)
+    if not callable(method):
+        return ""
+    try:
+        provider_id = method(umo=umo)
+    except TypeError:
+        provider_id = method(umo)
+    return str(await _maybe_await(provider_id) or "").strip()
+
+
+async def _maybe_await(value: Any) -> Any:
+    if hasattr(value, "__await__"):
+        return await value
+    return value
 
 
 def _conversation_id(container_tag: str, layer: str) -> str:

@@ -52,6 +52,63 @@
     "type": "bool",
     "default": true
   },
+  "retain_decision_mode": {
+    "description": "写入判定模式：all 保持旧行为，balanced 仅写入较稳定的记忆，strict 只写入明确要求记住的内容",
+    "type": "string",
+    "default": "balanced"
+  },
+  "retain_min_chars": {
+    "description": "自动写入判定的最小有效字符数",
+    "type": "int",
+    "default": 8
+  },
+  "retain_sensitive_requires_explicit": {
+    "description": "联系方式、邮箱、身份证等敏感信息必须明确要求记住才允许写入",
+    "type": "bool",
+    "default": true
+  },
+  "retain_ai_enabled": {
+    "description": "启用 AI 写入判定和记忆萃取；会额外调用当前 LLM Provider",
+    "type": "bool",
+    "default": false
+  },
+  "retain_ai_provider_id": {
+    "description": "AI 写入判定使用的 AstrBot LLM 供应商",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用当前会话的 LLM 供应商；选择后固定使用所选供应商执行记忆判定。",
+    "_special": "select_provider"
+  },
+  "retain_ai_fallback_to_current_provider": {
+    "description": "所选 AI 判定供应商调用失败时回退到当前会话供应商",
+    "type": "bool",
+    "default": false
+  },
+  "retain_ai_min_confidence": {
+    "description": "AI 写入判定最低置信度，低于该值则跳过写入",
+    "type": "float",
+    "default": 0.7
+  },
+  "retain_dedupe_enabled": {
+    "description": "写入前先检索当前 scope，跳过高度相似的重复记忆",
+    "type": "bool",
+    "default": true
+  },
+  "retain_dedupe_threshold": {
+    "description": "重复记忆相似度阈值，0 返回更宽松，1 更严格",
+    "type": "float",
+    "default": 0.85
+  },
+  "retain_dedupe_limit": {
+    "description": "写入前去重最多检查的历史记忆条数",
+    "type": "int",
+    "default": 5
+  },
+  "retain_write_raw_conversation": {
+    "description": "写入原始本轮对话而不是精炼后的记忆文本；all 模式始终保持原始写入",
+    "type": "bool",
+    "default": false
+  },
   "retain_user_message": {
     "description": "写入用户本轮消息",
     "type": "bool",
