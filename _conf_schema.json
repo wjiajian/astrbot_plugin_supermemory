@@ -27,9 +27,10 @@
     "default": true
   },
   "enable_group_shared_memory": {
-    "description": "启用群公共记忆层；群聊召回会同时检索群公共记忆和当前群成员个人记忆",
+    "description": "启用群公共记忆层：",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "群聊召回会同时检索群公共记忆和当前群成员个人记忆。"
   },
   "recall_limit": {
     "description": "每轮最多注入的记忆条数",
@@ -63,9 +64,10 @@
     "default": true
   },
   "retain_decision_mode": {
-    "description": "写入判定模式：all 保持旧行为，balanced 仅写入较稳定的记忆，strict 只写入明确要求记住的内容",
+    "description": "写入判定模式：",
     "type": "string",
-    "default": "balanced"
+    "default": "balanced",
+    "hint": "all 保持旧行为，balanced 仅写入较稳定的记忆，strict 只写入明确要求记住的内容。"
   },
   "retain_min_chars": {
     "description": "自动写入判定的最小有效字符数",
@@ -73,9 +75,10 @@
     "default": 8
   },
   "retain_sensitive_requires_explicit": {
-    "description": "联系方式、邮箱、身份证等敏感信息必须明确要求记住才允许写入",
+    "description": "联系方式、邮箱、身份证等敏感信息：",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "开启后包含敏感信息的消息需要用户明确要求记住（如回复“记住”）才会写入 Supermemory。"
   },
   "retain_ai_enabled": {
     "description": "启用 AI 写入判定和记忆萃取；会额外调用当前 LLM Provider",
@@ -115,9 +118,10 @@
     "default": 5
   },
   "retain_write_raw_conversation": {
-    "description": "写入原始本轮对话而不是精炼后的记忆文本；all 模式始终保持原始写入",
+    "description": "写入原始本轮对话而不是精炼后的记忆文本",
     "type": "bool",
-    "default": false
+    "default": false,
+    "hint": "开启后写入的内容将包含用户消息和助手回复的原始文本，这可能导致写入内容更冗长，但保留了完整的对话细节。all 模式始终保持原始写入。"
   },
   "retain_user_message": {
     "description": "写入用户本轮消息",
