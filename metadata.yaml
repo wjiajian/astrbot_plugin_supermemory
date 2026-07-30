@@ -10,3 +10,5 @@ support_platforms:
   - aiocqhttp
   - qq_official
   - qq_official_webhook
+tags:
+  - 长期记忆
