@@ -34,9 +34,14 @@ def memory_ai_min_confidence(config: Any) -> float:
     return _clamp_float(_config_get(config, "retain_ai_min_confidence", DEFAULT_MEMORY_AI_MIN_CONFIDENCE))
 
 
-def build_recall_query_prompt(query: str, max_queries: int = DEFAULT_RECALL_QUERY_LIMIT) -> str:
+def build_recall_query_prompt(
+    query: str,
+    recent_context: list[dict[str, str]] | None = None,
+    max_queries: int = DEFAULT_RECALL_QUERY_LIMIT,
+) -> str:
     payload = {
         "user_query": _clean_text(query),
+        "recent_context": list(recent_context or []),
         "max_queries": max(1, int(max_queries)),
     }
     return (
@@ -45,6 +50,8 @@ def build_recall_query_prompt(query: str, max_queries: int = DEFAULT_RECALL_QUER
         "Schema: {\"queries\": [\"search query\"], \"reason\": \"short reason\"}\n"
         "Rules:\n"
         "- Include the original meaning, not necessarily the exact original words.\n"
+        "- recent_context holds earlier messages. Use it to resolve references in user_query (e.g. 'that one', "
+        "'what about it'), but every query must serve what user_query needs now.\n"
         "- Generate 1 to max_queries short search queries.\n"
         "- Prefer the user's language.\n"
         "- Include terms that help retrieve names, preferences, project facts, rules, corrections, or prior decisions when relevant.\n"

@@ -13,6 +13,7 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
 
 from .commands import PluginStateStore, build_help_text, run_manual_recall_for_scopes
+from .conversation_context import DEFAULT_CONTEXT_TURNS, recent_turns, short_query_with_context
 from .memory_ai import (
     build_recall_query_prompt,
     memory_ai_enabled,
@@ -23,10 +24,11 @@ from .memory_ai import (
 from .memory_formatter import extract_memory_texts, format_recall_results
 from .retention_policy import (
     RetainDecision,
-    apply_ai_retention_result,
+    apply_ai_retention_results,
     build_ai_retention_prompt,
     decide_retention,
     dedupe_action,
+    is_trivial_message,
     precheck_ai_retention,
     should_write_raw_conversation,
 )
@@ -35,6 +37,7 @@ from .supermemory_client import SupermemoryClient, SupermemoryClientError
 
 
 PLUGIN_NAME = "astrbot_plugin_supermemory"
+RECENT_CONTEXT_EXTRA_KEY = "supermemory_recent_context"
 T = TypeVar("T")
 
 
@@ -73,12 +76,15 @@ class SupermemoryPlugin(Star):
         if not self._config_complete():
             return
 
+        recent = recent_turns(getattr(req, "contexts", None), self._context_turns())
+        _set_event_extra(event, RECENT_CONTEXT_EXTRA_KEY, recent)
+
         query = _event_text(event)
-        if not query:
+        if not query or is_trivial_message(query):
             return
 
         try:
-            queries = await self._recall_queries(event, query)
+            queries = await self._recall_queries(event, query, recent)
             formatted = await run_manual_recall_for_scopes(
                 await self._client(),
                 query=query,
@@ -90,6 +96,7 @@ class SupermemoryPlugin(Star):
                 max_extract_depth=self._memory_extract_max_depth(),
                 queries=queries,
                 empty_message="",
+                guidance=True,
             )
         except SupermemoryClientError as exc:
             _log_warning(f"Supermemory recall failed: {exc}")
@@ -117,31 +124,51 @@ class SupermemoryPlugin(Star):
 
         user_text = _event_text(event)
         assistant_text = _response_text(resp)
-        decision = await self._retention_decision(event, user_text, assistant_text, scopes.primary.scope_type)
-        if not decision.should_retain:
-            _log_debug(f"Supermemory retain skipped: {decision.reason}")
+        if not assistant_text and getattr(resp, "tools_call_name", None):
+            _log_debug("Supermemory retain skipped: tool call step")
+            return
+        event_time = _event_datetime(event)
+        recent = _get_event_extra(event, RECENT_CONTEXT_EXTRA_KEY)
+        decisions = await self._retention_decisions(
+            event,
+            user_text,
+            assistant_text,
+            scopes.primary.scope_type,
+            event_time,
+            recent if isinstance(recent, list) else [],
+        )
+        retained = [decision for decision in decisions if decision.should_retain]
+        if not retained:
+            _log_debug(f"Supermemory retain skipped: {', '.join(decision.reason for decision in decisions)}")
             return
 
-        messages = self._retain_messages(user_text, assistant_text, decision)
-        if not messages:
-            return
-
+        timestamp = _iso_utc(event_time)
+        written: set[tuple[str, str]] = set()
         try:
             client = await self._client()
-            for retain_scope in self._active_memory_scopes(scopes.retain_scopes):
-                if retain_scope.scope_type not in decision.target_scope_types:
+            for decision in retained:
+                messages = self._retain_messages(user_text, assistant_text, decision)
+                if not messages:
                     continue
                 content = _messages_text(messages)
-                retain_action = await self._retain_dedupe_action(client, content, retain_scope, decision)
-                if retain_action == "duplicate":
-                    _log_debug(f"Supermemory retain skipped duplicate: {retain_scope.scope_type}")
-                    continue
-                await client.ingest_conversation(
-                    conversation_id=_conversation_id(retain_scope.container_tag, retain_scope.scope_type),
-                    messages=messages,
-                    container_tag=retain_scope.container_tag,
-                    metadata=self._retain_metadata(retain_scope.metadata, decision, retain_action),
-                )
+                for retain_scope in self._active_memory_scopes(scopes.retain_scopes):
+                    if retain_scope.scope_type not in decision.target_scope_types:
+                        continue
+                    if (retain_scope.scope_type, content) in written:
+                        continue
+                    written.add((retain_scope.scope_type, content))
+                    retain_action = await self._retain_dedupe_action(client, content, retain_scope, decision)
+                    if retain_action == "duplicate":
+                        _log_debug(f"Supermemory retain skipped duplicate: {retain_scope.scope_type}")
+                        continue
+                    metadata = self._retain_metadata(retain_scope.metadata, decision, retain_action)
+                    metadata["retention_timestamp"] = timestamp
+                    await client.ingest_conversation(
+                        conversation_id=_conversation_id(retain_scope.container_tag, retain_scope.scope_type),
+                        messages=messages,
+                        container_tag=retain_scope.container_tag,
+                        metadata=metadata,
+                    )
         except SupermemoryClientError as exc:
             _log_warning(f"Supermemory retain failed: {exc}")
 
@@ -305,6 +332,12 @@ class SupermemoryPlugin(Star):
         except (TypeError, ValueError):
             return 4
 
+    def _context_turns(self) -> int:
+        try:
+            return max(0, int(self.config.get("context_turns", DEFAULT_CONTEXT_TURNS)))
+        except (TypeError, ValueError):
+            return DEFAULT_CONTEXT_TURNS
+
     def _request_timeout_seconds(self) -> int:
         try:
             return max(1, int(self.config.get("request_timeout_seconds") or 8))
@@ -341,35 +374,47 @@ class SupermemoryPlugin(Star):
     def _active_memory_scopes(self, scopes: list[MemoryScope]) -> list[MemoryScope]:
         return [scope for scope in scopes if self._memory_scope_enabled(scope)]
 
-    async def _retention_decision(
+    async def _retention_decisions(
         self,
         event: AstrMessageEvent,
         user_text: str,
         assistant_text: str,
         primary_scope_type: str,
-    ) -> RetainDecision:
+        event_time: datetime | None = None,
+        recent_context: list[dict[str, str]] | None = None,
+    ) -> list[RetainDecision]:
         if memory_ai_enabled(self.config):
             base_decision = precheck_ai_retention(user_text, assistant_text, primary_scope_type, self.config)
             if not base_decision.should_retain:
-                return base_decision
+                return [base_decision]
 
-            prompt = build_ai_retention_prompt(user_text, assistant_text, primary_scope_type)
+            current_time = (event_time or _event_datetime(event)).isoformat(timespec="minutes")
+            prompt = build_ai_retention_prompt(
+                user_text, assistant_text, primary_scope_type, current_time, recent_context
+            )
             try:
                 response_text = await _call_memory_ai(self._context, event, prompt, self.config, "retention")
             except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
                 _log_warning(f"Supermemory AI retention fallback to rules: {exc}")
             else:
-                ai_decision = apply_ai_retention_result(base_decision, response_text, primary_scope_type, self.config)
-                if ai_decision is not None:
-                    return ai_decision
+                ai_decisions = apply_ai_retention_results(base_decision, response_text, primary_scope_type, self.config)
+                if ai_decisions is not None:
+                    return ai_decisions
                 _log_warning("Supermemory AI retention returned invalid JSON; fallback to rules.")
 
-        return decide_retention(user_text, assistant_text, primary_scope_type, self.config)
+        return [decide_retention(user_text, assistant_text, primary_scope_type, self.config)]
 
-    async def _recall_queries(self, event: AstrMessageEvent, query: str) -> list[str]:
+    async def _recall_queries(
+        self,
+        event: AstrMessageEvent,
+        query: str,
+        recent_context: list[dict[str, str]] | None = None,
+    ) -> list[str]:
+        recent = list(recent_context or [])
         if not memory_ai_enabled(self.config):
-            return [query]
-        prompt = build_recall_query_prompt(query)
+            contextual_query = short_query_with_context(query, recent)
+            return [query, contextual_query] if contextual_query else [query]
+        prompt = build_recall_query_prompt(query, recent)
         try:
             response_text = await _call_memory_ai(self._context, event, prompt, self.config, "recall")
         except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
@@ -433,7 +478,7 @@ class SupermemoryPlugin(Star):
                 "retention_sensitivity": decision.sensitivity,
                 "retention_type": decision.memory_type,
                 "retention_source": decision.source,
-                "retention_confidence": decision.confidence,
+                "retention_confidence": str(decision.confidence),
                 "retention_action": retain_action,
             }
         )
@@ -467,6 +512,37 @@ def _response_text(resp: LLMResponse | TextResponseLike | str | bytes | None) ->
     if isinstance(resp, str):
         return resp.strip()
     return str(getattr(resp, "completion_text", "") or "").strip()
+
+
+def _set_event_extra(event: AstrMessageEvent, key: str, value: object) -> None:
+    set_extra = getattr(event, "set_extra", None)
+    if callable(set_extra):
+        set_extra(key, value)
+
+
+def _get_event_extra(event: AstrMessageEvent, key: str) -> object:
+    get_extra = getattr(event, "get_extra", None)
+    if not callable(get_extra):
+        return None
+    try:
+        return get_extra(key, None)
+    except TypeError:
+        return get_extra(key)
+
+
+def _event_datetime(event: AstrMessageEvent) -> datetime:
+    """Local-timezone time of the message, falling back to now."""
+    raw = getattr(getattr(event, "message_obj", None), "timestamp", None)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+        try:
+            return datetime.fromtimestamp(raw, timezone.utc).astimezone()
+        except (OverflowError, OSError, ValueError):
+            pass
+    return datetime.now(timezone.utc).astimezone()
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _event_looks_like_group(event: AstrMessageEvent) -> bool:

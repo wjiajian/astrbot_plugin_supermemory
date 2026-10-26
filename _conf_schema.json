@@ -1,166 +1,199 @@
 {
   "enabled": {
-    "description": "启用 Supermemory 长期记忆",
+    "description": "启用长期记忆",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "总开关。关闭后插件不再读取或写入任何记忆，已保存的记忆不受影响。"
   },
   "api_base": {
-    "description": "Supermemory API Base URL",
+    "description": "Supermemory 服务地址",
     "type": "string",
-    "default": "https://api.supermemory.ai"
+    "default": "https://api.supermemory.ai",
+    "hint": "保持默认即可。"
   },
   "api_key": {
-    "description": "Supermemory API Key",
+    "description": "Supermemory API Key（必填）",
     "type": "string",
     "default": "",
-    "hint": "在 Supermemory Developer Platform 获取 API Key。",
+    "hint": "在 Supermemory Developer Platform 后台创建并复制到这里。",
     "obvious_hint": true
   },
   "enable_private_memory": {
-    "description": "启用私聊记忆",
+    "description": "私聊中使用记忆",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "开启后，机器人会记住私聊对象的信息，并在之后的私聊中想起来。每个用户的记忆相互隔离。"
   },
   "enable_group_memory": {
-    "description": "启用群聊记忆",
+    "description": "群聊中使用记忆",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "开启后，机器人会记住群成员在该群里的个人信息，以及（若开启下一项）群规则、群项目等群内公共信息。不同群的记忆相互隔离。"
   },
   "enable_group_shared_memory": {
-    "description": "启用群公共记忆层：",
+    "description": "群聊中使用群公共记忆",
     "type": "bool",
     "default": true,
-    "hint": "群聊召回会同时检索群公共记忆和当前群成员个人记忆。"
+    "hint": "开启后，群规则、群公告、项目约定等全群通用的信息会单独保存，并对该群所有成员可见。关闭后群聊只使用每个成员各自的个人记忆。"
   },
   "recall_limit": {
-    "description": "每轮最多注入的记忆条数",
+    "description": "每次回复最多参考几条记忆",
     "type": "int",
-    "default": 5
+    "default": 5,
+    "hint": "回复前会从记忆库中找出相关的几条，附加给 AI 作参考。群聊中群公共记忆和个人记忆各自最多取这么多条。条数越多参考越全，但会消耗更多 token。"
   },
   "recall_item_max_chars": {
-    "description": "每条召回记忆注入前的最大字符数",
+    "description": "每条记忆最多附加多少字",
     "type": "int",
-    "default": 360
-  },
-  "memory_extract_max_depth": {
-    "description": "解析召回结果嵌套结构的最大深度",
-    "type": "int",
-    "default": 4
+    "default": 360,
+    "hint": "过长的记忆会被截断后再交给 AI，用来控制 token 消耗。一般无需修改。"
   },
   "search_threshold": {
-    "description": "Supermemory 搜索阈值，0 返回更多结果，1 更严格",
+    "description": "记忆相关度门槛（0～1）",
     "type": "float",
-    "default": 0.6
+    "default": 0.6,
+    "hint": "只有与当前消息相关度达到此值的记忆才会被参考。调低能找到更多记忆，但可能混入无关内容；调高则只保留非常相关的记忆。"
   },
   "search_mode": {
-    "description": "搜索模式：memories、hybrid 或 documents",
+    "description": "记忆搜索方式",
     "type": "string",
     "default": "memories",
-    "hint": "默认 memories，适合聊天长期记忆。"
+    "options": ["memories", "hybrid", "documents"],
+    "labels": ["记忆（推荐）", "记忆 + 原文", "仅原文"],
+    "hint": "记忆：只搜索 Supermemory 整理后的记忆，适合聊天场景。记忆 + 原文：同时搜索记忆和原始对话片段，更全但更杂。仅原文：只搜索原始对话片段。"
+  },
+  "memory_extract_max_depth": {
+    "description": "记忆结果解析深度（高级）",
+    "type": "int",
+    "default": 4,
+    "hint": "解析 Supermemory 返回数据时最多向下查找几层。一般无需修改。"
+  },
+  "context_turns": {
+    "description": "参考最近几轮对话来理解指代",
+    "type": "int",
+    "default": 3,
+    "hint": "用户说“就用那个”“改成周五”时，插件会结合最近几轮对话判断“那个”“周五”指什么，再决定记什么、查什么。这些旧对话只用来理解当前这句话，不会被再次写入。填 0 关闭。"
   },
   "retain_enabled": {
-    "description": "启用回复后写入 Supermemory",
-    "type": "bool",
-    "default": true
-  },
-  "retain_decision_mode": {
-    "description": "写入判定模式：",
-    "type": "string",
-    "default": "balanced",
-    "hint": "all 保持旧行为，balanced 仅写入较稳定的记忆，strict 只写入明确要求记住的内容。"
-  },
-  "retain_min_chars": {
-    "description": "自动写入判定的最小有效字符数",
-    "type": "int",
-    "default": 8
-  },
-  "retain_sensitive_requires_explicit": {
-    "description": "联系方式、邮箱、身份证等敏感信息：",
+    "description": "自动保存新记忆",
     "type": "bool",
     "default": true,
-    "hint": "开启后包含敏感信息的消息需要用户明确要求记住（如回复“记住”）才会写入 Supermemory。"
+    "hint": "开启后，机器人每次回复后会判断这轮对话里有没有值得长期记住的内容，有就保存。关闭后只读取已有记忆，不再新增。"
+  },
+  "retain_decision_mode": {
+    "description": "自动保存的严格程度",
+    "type": "string",
+    "default": "balanced",
+    "options": ["balanced", "strict", "all"],
+    "labels": ["均衡（推荐）", "严格", "全部保存"],
+    "hint": "均衡：只保存偏好、身份、约定这类长期有用的信息，忽略闲聊。严格：只有用户明确说“记住……”时才保存。全部保存：每轮对话原样保存，记忆库增长快、噪音多，仅用于兼容旧版本。"
+  },
+  "retain_min_chars": {
+    "description": "过短的消息不保存（字数）",
+    "type": "int",
+    "default": 8,
+    "hint": "用户消息的有效字数少于此值时，视为信息量不足，不会自动保存。用户明确说“记住”时不受此限制。"
+  },
+  "retain_sensitive_requires_explicit": {
+    "description": "隐私信息需用户明确要求才保存",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，包含手机号、邮箱、身份证号等隐私信息的消息，只有用户明确说“记住”才会保存。密码、API Key、Token 等密钥无论如何都不会保存。"
   },
   "memory_ai_enabled": {
-    "description": "启用 AI 记忆分析和召回拓展",
+    "description": "用 AI 整理和查找记忆",
     "type": "bool",
     "default": false,
-    "hint": "开启后，写入判定和召回查询拓展都会额外调用 LLM。建议为 memory_ai_provider_id 选择便宜、快速的小模型。"
+    "hint": "开启后，由 AI 判断哪些内容值得记、把对话整理成简洁的事实，并在查找记忆时补充更多相关搜索词，效果更好。代价是每轮对话会额外调用 1～2 次 LLM，建议在下一项中选一个便宜、快速的小模型。"
   },
   "memory_ai_provider_id": {
-    "description": "AI 记忆分析使用的 AstrBot LLM 供应商",
+    "description": "整理记忆使用的模型",
     "type": "string",
     "default": "",
-    "hint": "推荐选择小模型；留空时使用当前会话的 LLM 供应商。",
+    "hint": "仅在开启“用 AI 整理和查找记忆”后生效。推荐选择便宜、快速的小模型；留空则使用当前对话正在用的模型。",
     "_special": "select_provider"
   },
   "memory_ai_fallback_to_current_provider": {
-    "description": "所选 AI 记忆供应商调用失败时回退到当前会话供应商",
+    "description": "所选模型出错时改用当前对话模型",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "上一项选择的模型调用失败时，是否改用当前对话的模型重试。关闭后本次跳过 AI，改用不调用 AI 的默认方式处理。"
   },
   "memory_ai_min_confidence": {
-    "description": "AI 写入判定最低置信度，低于该值则跳过写入",
+    "description": "AI 把握度低于此值时不保存",
     "type": "float",
-    "default": 0.7
+    "default": 0.7,
+    "hint": "AI 判断每条记忆时会给出 0～1 的把握度。数值越高，保存得越谨慎、记忆越少越准；数值越低，保存得越多。"
   },
   "retain_ai_enabled": {
-    "description": "兼容旧配置：启用 AI 写入判定和记忆萃取",
+    "description": "（旧版配置，已由“用 AI 整理和查找记忆”替代）",
     "type": "bool",
     "default": false,
-    "hint": "推荐改用 memory_ai_enabled；仅当 memory_ai_enabled 不存在时作为兼容旧配置读取。"
+    "hint": "仅为兼容旧版本保留，请改用“用 AI 整理和查找记忆”。",
+    "invisible": true
   },
   "retain_ai_provider_id": {
-    "description": "兼容旧配置：AI 写入判定使用的 AstrBot LLM 供应商",
+    "description": "（旧版配置，已由“整理记忆使用的模型”替代）",
     "type": "string",
     "default": "",
-    "hint": "推荐改用 memory_ai_provider_id。",
-    "_special": "select_provider"
+    "hint": "仅为兼容旧版本保留，请改用“整理记忆使用的模型”。",
+    "_special": "select_provider",
+    "invisible": true
   },
   "retain_ai_fallback_to_current_provider": {
-    "description": "兼容旧配置：",
+    "description": "（旧版配置，已由“所选模型出错时改用当前对话模型”替代）",
     "type": "bool",
     "default": false,
-    "hint": "所选 AI 记忆供应商调用失败时回退到当前主供应商"
+    "hint": "仅为兼容旧版本保留。",
+    "invisible": true
   },
   "retain_ai_min_confidence": {
-    "description": "兼容旧配置：AI 写入判定最低置信度",
+    "description": "（旧版配置，已由“AI 把握度低于此值时不保存”替代）",
     "type": "float",
-    "default": 0.7
+    "default": 0.7,
+    "hint": "仅为兼容旧版本保留。",
+    "invisible": true
   },
   "retain_dedupe_enabled": {
-    "description": "写入前先检索当前 scope，跳过高度相似的重复记忆",
+    "description": "跳过重复的记忆",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "保存前先查一下已有记忆，内容几乎相同的就不再重复保存。用户纠正旧信息时（如“我搬到上海了”）始终会保存。"
   },
   "retain_dedupe_threshold": {
-    "description": "重复记忆相似度阈值，0 返回更宽松，1 更严格",
+    "description": "相似度达到多少算重复（0～1）",
     "type": "float",
-    "default": 0.85
+    "default": 0.85,
+    "hint": "新记忆与已有记忆的相似度达到此值时视为重复并跳过。调低会跳过更多相近内容；调高则只跳过几乎一模一样的内容。"
   },
   "retain_dedupe_limit": {
-    "description": "写入前去重最多检查的历史记忆条数",
+    "description": "查重时比对的已有记忆条数",
     "type": "int",
-    "default": 5
+    "default": 5,
+    "hint": "保存前取出最相关的几条已有记忆做比对。条数越多查重越全，但请求稍慢。"
   },
   "retain_write_raw_conversation": {
-    "description": "写入原始本轮对话而不是精炼后的记忆文本",
+    "description": "保存对话原文而不是整理后的要点",
     "type": "bool",
     "default": false,
-    "hint": "开启后写入的内容将包含用户消息和助手回复的原始文本，这可能导致写入内容更冗长，但保留了完整的对话细节。all 模式始终保持原始写入。"
+    "hint": "默认只保存整理后的简洁事实（如“用户喜欢喝美式咖啡”）。开启后改为保存这轮对话的原文，细节更全，但记忆更冗长、更难被准确查到。“全部保存”模式下始终保存原文。"
   },
   "retain_user_message": {
-    "description": "写入用户本轮消息",
+    "description": "保存原文时包含用户的消息",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "仅在保存对话原文时生效：原文里是否包含用户说的话。一般保持开启。"
   },
   "retain_assistant_message": {
-    "description": "写入助手本轮回复",
+    "description": "保存原文时包含机器人的回复",
     "type": "bool",
-    "default": true
+    "default": true,
+    "hint": "仅在保存对话原文时生效：原文里是否包含机器人的回复。关闭可减少冗余内容。"
   },
   "request_timeout_seconds": {
-    "description": "Supermemory 请求超时时间（秒）",
+    "description": "连接 Supermemory 的超时时间（秒）",
     "type": "int",
-    "default": 8
+    "default": 8,
+    "hint": "超过这个时间没有响应就放弃本次读写，机器人照常回复。网络较慢时可适当调大。"
   }
 }

@@ -15,6 +15,7 @@ Supermemory 是一个面向 AI 应用的记忆服务，可以把对话内容写�
 - 发送到 Supermemory 的 sender ID、group ID、`unified_msg_origin` 都会先做 hash。
 - 可启用统一的 `memory_ai_*` 配置，让小模型负责判断是否写入、生成自然事实句，并为自动召回和 `/supermemory recall` 拓展搜索 query。
 - 支持 `search_threshold` 和 `search_mode` 调整召回严格程度与搜索模式。
+- 结合最近几轮对话理解“就用那个”这类指代，用于判断记什么、查什么。
 - 提供 `/supermemory` 命令，用于状态检查、手动召回和当前会话临时开关。
 
 ## 平台兼容性
@@ -31,18 +32,10 @@ Supermemory 是一个面向 AI 应用的记忆服务，可以把对话内容写�
 
 1. 在 Supermemory Developer Platform 创建或获取 API Key。
 2. 将本仓库安装到 AstrBot 插件目录。
-3. 在 AstrBot 插件配置中填写：
-   - `api_key`：Supermemory API Key
-   - `api_base`：保持默认值 `https://api.supermemory.ai`
-   - `recall_limit`：每轮最多注入的记忆条数，默认 `5`
-   - `recall_item_max_chars`：每条召回记忆注入前的最大字符数，默认 `360`
-   - `memory_extract_max_depth`：解析召回结果嵌套结构的最大深度，默认 `4`
-   - `search_threshold`：搜索阈值，默认 `0.6`
-   - `search_mode`：搜索模式，默认 `memories`
-   - `memory_ai_enabled`：是否启用 AI 记忆分析和召回拓展，默认关闭
-   - `memory_ai_provider_id`：建议选择便宜、快速的小模型 Provider；留空时使用当前会话 Provider
-4. 按需调整私聊、群聊和群公共记忆开关。
-5. 保存配置后，重载插件或重启 AstrBot。
+3. 在 AstrBot WebUI 的插件配置中填写必填项“Supermemory API Key（必填）”（`api_key`）。
+
+   其余配置保持默认即可使用。如果想让记忆更精准，可以开启“用 AI 整理和查找记忆”（`memory_ai_enabled`），并在“整理记忆使用的模型”（`memory_ai_provider_id`）中选一个便宜、快速的小模型。
+4. 保存配置后，重载插件或重启 AstrBot。
 
 插件依赖只包含 `httpx`，AstrBot 通常会根据 `requirements.txt` 自动安装。
 
@@ -54,48 +47,87 @@ pip install -r data/plugins/astrbot_plugin_supermemory/requirements.txt
 
 ## 配置项说明
 
-- `enabled`：全局启用或关闭插件。
-- `api_base`：Supermemory API Base URL，默认 `https://api.supermemory.ai`。
-- `api_key`：Supermemory API Key。
-- `enable_private_memory`：启用私聊记忆。
-- `enable_group_memory`：启用群聊记忆。
-- `enable_group_shared_memory`：启用群公共记忆层。关闭后，群聊只使用当前群成员个人记忆。
-- `recall_limit`：每轮最多注入的记忆条数。
-- `recall_item_max_chars`：每条召回记忆注入前的最大字符数，默认 `360`。
-- `memory_extract_max_depth`：解析召回结果嵌套结构的最大深度，默认 `4`。
-- `search_threshold`：Supermemory 搜索阈值，`0` 返回更多结果，`1` 更严格。
-- `search_mode`：搜索模式，可选 `memories`、`hybrid`、`documents`。
-- `retain_enabled`：启用 LLM 回复后写入 Supermemory。
-- `retain_decision_mode`：写入判定模式，默认 `balanced`。`all` 保持旧行为，`balanced` 只自动写入较稳定的记忆，`strict` 只写入明确要求记住的内容。
-- `retain_min_chars`：自动写入判定的最小有效字符数，默认 `8`。
-- `retain_sensitive_requires_explicit`：邮箱、手机号、身份证等敏感信息必须明确要求记住才允许写入，默认开启；API Key、密码、token、private key 永不自动写入。
-- `memory_ai_enabled`：启用 AI 记忆分析和召回拓展，默认关闭。开启后写入判定和召回 query 拓展都会额外调用 AstrBot LLM Provider。
-- `memory_ai_provider_id`：AI 记忆分析使用的 AstrBot LLM 供应商。建议单独配置便宜、快速的小模型；留空时使用当前会话供应商。
-- `memory_ai_fallback_to_current_provider`：所选 AI 记忆供应商调用失败时是否回退到当前会话供应商，默认开启。
-- `memory_ai_min_confidence`：AI 写入判定最低置信度，默认 `0.7`。低于该值会跳过写入。
-- `retain_ai_enabled` / `retain_ai_provider_id` / `retain_ai_fallback_to_current_provider` / `retain_ai_min_confidence`：兼容旧配置；新安装和新配置建议使用 `memory_ai_*`。
-- `retain_dedupe_enabled`：写入前先检索当前 scope，跳过高度相似的重复记忆，默认开启。
-- `retain_dedupe_threshold`：重复记忆相似度阈值，默认 `0.85`。
-- `retain_dedupe_limit`：写入前去重最多检查的历史记忆条数，默认 `5`。
-- `retain_write_raw_conversation`：写入原始本轮对话而不是精炼后的记忆文本，默认关闭；`retain_decision_mode=all` 始终保持原始对话写入。
-- `retain_user_message`：写入用户本轮消息。
-- `retain_assistant_message`：写入助手本轮回复。
-- `request_timeout_seconds`：Supermemory 请求超时时间，单位秒。
+下表中的“页面名称”是 AstrBot WebUI 插件配置页中显示的名称，括号内是对应的配置 key。
+
+### 连接
+
+| 页面名称 | 默认值 | 说明 |
+|---|---|---|
+| 启用长期记忆（`enabled`） | 开启 | 总开关。关闭后插件不再读取或写入任何记忆，已保存的记忆不受影响。 |
+| Supermemory 服务地址（`api_base`） | `https://api.supermemory.ai` | 保持默认即可。 |
+| Supermemory API Key（必填）（`api_key`） | 空 | 在 Supermemory Developer Platform 后台创建并复制到这里。 |
+| 连接 Supermemory 的超时时间（秒）（`request_timeout_seconds`） | `8` | 超过这个时间没有响应就放弃本次读写，机器人照常回复。网络较慢时可适当调大。 |
+
+### 记忆范围
+
+| 页面名称 | 默认值 | 说明 |
+|---|---|---|
+| 私聊中使用记忆（`enable_private_memory`） | 开启 | 机器人会记住私聊对象的信息，并在之后的私聊中想起来。每个用户的记忆相互隔离。 |
+| 群聊中使用记忆（`enable_group_memory`） | 开启 | 机器人会记住群成员在该群里的个人信息，以及（若开启下一项）群规则、群项目等群内公共信息。不同群的记忆相互隔离。 |
+| 群聊中使用群公共记忆（`enable_group_shared_memory`） | 开启 | 群规则、群公告、项目约定等全群通用的信息会单独保存，并对该群所有成员可见。关闭后群聊只使用每个成员各自的个人记忆。 |
+
+### 召回
+
+| 页面名称 | 默认值 | 说明 |
+|---|---|---|
+| 每次回复最多参考几条记忆（`recall_limit`） | `5` | 回复前会从记忆库中找出相关的几条，附加给 AI 作参考。群聊中群公共记忆和个人记忆各自最多取这么多条。条数越多参考越全，但会消耗更多 token。 |
+| 每条记忆最多附加多少字（`recall_item_max_chars`） | `360` | 过长的记忆会被截断后再交给 AI，用来控制 token 消耗。一般无需修改。 |
+| 记忆相关度门槛（0～1）（`search_threshold`） | `0.6` | 只有与当前消息相关度达到此值的记忆才会被参考。调低能找到更多记忆，但可能混入无关内容；调高则只保留非常相关的记忆。 |
+| 记忆搜索方式（`search_mode`） | 记忆（`memories`） | 记忆：只搜索 Supermemory 整理后的记忆，适合聊天场景。记忆 + 原文（`hybrid`）：同时搜索记忆和原始对话片段，更全但更杂。仅原文（`documents`）：只搜索原始对话片段。 |
+| 参考最近几轮对话来理解指代（`context_turns`） | `3` | 用户说“就用那个”“改成周五”时，插件会结合最近几轮对话判断“那个”“周五”指什么，再决定记什么、查什么。这些旧对话只用来理解当前这句话，不会被再次写入。填 `0` 关闭。 |
+| 记忆结果解析深度（高级）（`memory_extract_max_depth`） | `4` | 解析 Supermemory 返回数据时最多向下查找几层。一般无需修改。 |
+
+### 写入
+
+| 页面名称 | 默认值 | 说明 |
+|---|---|---|
+| 自动保存新记忆（`retain_enabled`） | 开启 | 机器人每次回复后会判断这轮对话里有没有值得长期记住的内容，有就保存。关闭后只读取已有记忆，不再新增。 |
+| 自动保存的严格程度（`retain_decision_mode`） | 均衡（`balanced`） | 均衡：只保存偏好、身份、约定这类长期有用的信息，忽略闲聊。严格（`strict`）：只有用户明确说“记住……”时才保存。全部保存（`all`）：每轮对话原样保存，记忆库增长快、噪音多，仅用于兼容旧版本。 |
+| 过短的消息不保存（字数）（`retain_min_chars`） | `8` | 用户消息的有效字数少于此值时，视为信息量不足，不会自动保存。用户明确说“记住”时不受此限制。 |
+| 隐私信息需用户明确要求才保存（`retain_sensitive_requires_explicit`） | 开启 | 包含手机号、邮箱、身份证号等隐私信息的消息，只有用户明确说“记住”才会保存。密码、API Key、Token、私钥等密钥无论如何都不会保存。 |
+| 保存对话原文而不是整理后的要点（`retain_write_raw_conversation`） | 关闭 | 默认只保存整理后的简洁事实（如“用户喜欢喝美式咖啡”）。开启后改为保存这轮对话的原文，细节更全，但记忆更冗长、更难被准确查到。“全部保存”模式下始终保存原文。 |
+| 保存原文时包含用户的消息（`retain_user_message`） | 开启 | 仅在保存对话原文时生效：原文里是否包含用户说的话。一般保持开启。 |
+| 保存原文时包含机器人的回复（`retain_assistant_message`） | 开启 | 仅在保存对话原文时生效：原文里是否包含机器人的回复。关闭可减少冗余内容。 |
+
+### 去重
+
+| 页面名称 | 默认值 | 说明 |
+|---|---|---|
+| 跳过重复的记忆（`retain_dedupe_enabled`） | 开启 | 保存前先查一下已有记忆，内容几乎相同的就不再重复保存。用户纠正旧信息时（如“我搬到上海了”）始终会保存。 |
+| 相似度达到多少算重复（0～1）（`retain_dedupe_threshold`） | `0.85` | 新记忆与已有记忆的相似度达到此值时视为重复并跳过。调低会跳过更多相近内容；调高则只跳过几乎一模一样的内容。 |
+| 查重时比对的已有记忆条数（`retain_dedupe_limit`） | `5` | 保存前取出最相关的几条已有记忆做比对。条数越多查重越全，但请求稍慢。 |
+
+### AI 记忆分析
+
+| 页面名称 | 默认值 | 说明 |
+|---|---|---|
+| 用 AI 整理和查找记忆（`memory_ai_enabled`） | 关闭 | 由 AI 判断哪些内容值得记、把对话整理成简洁的事实，并在查找记忆时补充更多相关搜索词，效果更好。代价是每轮对话会额外调用 1～2 次 LLM，建议选一个便宜、快速的小模型。 |
+| 整理记忆使用的模型（`memory_ai_provider_id`） | 空 | 仅在开启“用 AI 整理和查找记忆”后生效。推荐选择便宜、快速的小模型；留空则使用当前对话正在用的模型。 |
+| 所选模型出错时改用当前对话模型（`memory_ai_fallback_to_current_provider`） | 开启 | 上一项选择的模型调用失败时，是否改用当前对话的模型重试。关闭后本次跳过 AI，改用不调用 AI 的默认方式处理。 |
+| AI 把握度低于此值时不保存（`memory_ai_min_confidence`） | `0.7` | AI 判断每条记忆时会给出 0～1 的把握度。数值越高，保存得越谨慎、记忆越少越准；数值越低，保存得越多。 |
+
+旧版 `retain_ai_enabled` / `retain_ai_provider_id` / `retain_ai_fallback_to_current_provider` / `retain_ai_min_confidence` 已在配置页隐藏，已保存的旧配置仍然有效；新配置请使用 `memory_ai_*`。
 
 ## 写入判定策略
 
 写入流程现在采用 AI 优先、规则兜底：
 
-1. 如果 `memory_ai_enabled=true`，本地只做空文本、命令、硬敏感信息等必要过滤，然后直接调用 AI 判断是否写入、写入什么事实句、写入哪个 scope，以及记忆类型和置信度。
-2. AI 必须返回结构化 JSON；插件解析失败、调用失败或置信度低于 `memory_ai_min_confidence` 时，不影响聊天流程，会回退到本地精简规则。
+1. 如果 `memory_ai_enabled=true`，本地只做空文本、命令、硬敏感信息等必要过滤，然后调用 AI 从本轮对话中提取 0 到 5 条关于用户或群的长期记忆，每条带 scope、记忆类型（`preference`/`profile`/`event`/`project`/`rule`/`correction`）和置信度。AI 被要求只记用户本人说出或确认的信息，不记助手回复中的通用知识、用户的一次性提问和闲聊，并结合当前时间把“下周五”等相对时间换算成绝对日期。
+2. AI 必须返回结构化 JSON（`{"memories": [...]}`，同时兼容旧的单条格式）；插件解析失败或调用失败时，不影响聊天流程，会回退到本地精简规则。置信度低于 `memory_ai_min_confidence` 的单条记忆会被单独丢弃。
 3. 如果未启用 AI，本地规则只保留明确记忆意图、基础稳定事实、群规则/项目事实、个人偏好等几类，不再依赖大量手写锚点。
 4. 写入前仍会用 `memory_text` 在当前 containerTag search，若相似度超过 `retain_dedupe_threshold` 则跳过；纠正类记忆会继续写入，并在 metadata 中标记为 `correction`。
+5. AI 判定时会附带最近 `context_turns` 轮对话（来自 AstrBot 当前请求的上下文），但只从当前这一轮提取记忆；群聊上下文中其他成员的发言不会被归到当前用户。工具调用的中间响应不会触发写入。
+6. 每条记忆单独写入一次 conversation，metadata 中附带消息发生时间 `retention_timestamp`（UTC ISO 8601）。
 
 AI 生成的 `memory_text` 会作为自然、独立、可检索的事实句写入，不再强制添加人工锚点前缀。默认不会额外调用 LLM；只有开启 `memory_ai_enabled` 后才会调用小模型。需要兼容旧行为时，可设置 `retain_decision_mode=all`。
 
 ## 召回拓展策略
 
-默认召回只使用用户原始 query。开启 `memory_ai_enabled` 后，每次自动召回和手动 `/supermemory recall` 都会先让 AI 将原始 query 改写成 1 到 4 条搜索 query，插件会逐条检索、按记忆文本去重，并按 `recall_limit` 注入结果。AI 只负责拓展搜索词，不允许回答用户问题；如果 AI 调用失败或 JSON 解析失败，则直接回退为只使用原 query。
+默认召回只使用用户原始 query。开启 `memory_ai_enabled` 后，每次自动召回和手动 `/supermemory recall` 都会先让 AI 将原始 query 改写成 1 到 4 条搜索 query，插件会并发检索，在每个 scope 内用倒数排名融合（RRF）合并各条 query 的结果并去重，再按 `recall_limit` 注入。这样扩展 query 的结果不会被第一条 query 挤掉；部分请求失败时仍使用其余结果。
+
+召回改写同样会参考最近 `context_turns` 轮对话来补全指代。未开启 `memory_ai_enabled` 时，如果当前消息很短（如“那个呢？”），会额外用“上一条用户消息 + 当前消息”检索一次。“谢谢”“好的”等闲聊和命令不会触发自动召回。
+
+自动注入的记忆内容首行带有使用说明（按需参考、不逐条复述、以用户当前说法为准、无关则忽略），每条记忆前标注日期（取自 Supermemory 返回的日期字段，缺失时不标注），群公共记忆和群成员记忆分别放在 `scope="group_shared"` 和 `scope="group_member"` 的块中。手动 `/supermemory recall` 的输出不带使用说明。AI 只负责拓展搜索词，不允许回答用户问题；如果 AI 调用失败或 JSON 解析失败，则直接回退为只使用原 query。
 
 Supermemory 仍继续使用现有 `search_threshold` 和 `search_mode`，本版不新增额外的手动召回阈值配置。
 
@@ -133,9 +165,9 @@ astrbot_group_shared_<platform_id>_<group_id_hash>_<umo_hash>
 astrbot_group_member_<platform_id>_<group_id_hash>_<sender_id_hash>_<umo_hash>
 ```
 
-私聊只召回当前私聊 scope 的记忆；群聊会先召回当前群的公共记忆，再召回当前发言成员在该群内的个人记忆。启用 `memory_ai_enabled` 时由 AI 在允许范围内选择 `group_shared` 或 `group_member`；未启用 AI 或 AI 失败时，本地规则会把群规则、群公告、项目约定等内容写入群公共层，把个人偏好、称呼、个人资料等内容写入群成员个人层。`retain_decision_mode=all` 时保持旧行为，同时写入群公共层和群成员个人层。
+私聊只召回当前私聊 scope 的记忆；群聊会同时召回当前群的公共记忆和当前发言成员在该群内的个人记忆。启用 `memory_ai_enabled` 时由 AI 在允许范围内选择 `group_shared` 或 `group_member`；未启用 AI 或 AI 失败时，本地规则会把群规则、群公告、项目约定等内容写入群公共层，把个人偏好、称呼、个人资料等内容写入群成员个人层。`retain_decision_mode=all` 时保持旧行为，同时写入群公共层和群成员个人层。
 
-写入 metadata 会附带 `retention_reason`、`retention_type`、`retention_source`、`retention_confidence` 和 `retention_action`，便于在 Supermemory 后台排查某条记忆来自规则、AI 判断还是纠正/补充写入。
+写入 metadata 会附带 `retention_reason`、`retention_type`、`retention_source`、`retention_confidence`、`retention_action` 和 `retention_timestamp`，便于在 Supermemory 后台排查某条记忆来自规则、AI 判断还是纠正/补充写入。
 
 如果关闭 `enable_group_shared_memory`，群聊不会召回或写入群公共记忆层，但仍会使用当前群成员个人记忆层。
 
@@ -185,7 +217,7 @@ python -B -m unittest discover -s tests -v
 ### 语法检查
 
 ```bash
-python -B -m py_compile main.py commands.py supermemory_client.py memory_formatter.py scope.py retention_policy.py memory_ai.py
+python -B -m py_compile main.py commands.py supermemory_client.py memory_formatter.py scope.py retention_policy.py memory_ai.py conversation_context.py
 ```
 
 ### AstrBot 手动验收

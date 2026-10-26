@@ -49,8 +49,12 @@ class StaticContractTests(unittest.TestCase):
             "retain_user_message",
             "retain_assistant_message",
             "request_timeout_seconds",
+            "context_turns",
         ):
             self.assertIn(key, config)
+        self.assertEqual(config["context_turns"]["default"], 3)
+        self.assertEqual(config["search_mode"]["options"], ["memories", "hybrid", "documents"])
+        self.assertEqual(config["retain_decision_mode"]["options"], ["balanced", "strict", "all"])
         self.assertEqual(config["api_base"]["default"], "https://api.supermemory.ai")
         self.assertEqual(config["recall_item_max_chars"]["default"], 360)
         self.assertEqual(config["memory_extract_max_depth"]["default"], 4)

@@ -8,11 +8,13 @@ from typing import Any
 
 
 VALID_DECISION_MODES = {"all", "balanced", "strict"}
-VALID_MEMORY_TYPES = {"preference", "profile", "project", "rule", "correction", "conversation"}
+VALID_MEMORY_TYPES = {"preference", "profile", "event", "project", "rule", "correction", "conversation"}
 VALID_SENSITIVITY = {"low", "personal", "high"}
 GROUP_SCOPE_TYPES = {"group_shared", "group_member"}
 DEFAULT_AI_MIN_CONFIDENCE = 0.7
 DEFAULT_DEDUPE_THRESHOLD = 0.85
+MAX_AI_MEMORIES_PER_TURN = 5
+AI_PROMPT_ASSISTANT_MAX_CHARS = 1200
 
 
 @dataclass(frozen=True)
@@ -104,33 +106,89 @@ def decide_retention(
     )
 
 
-def build_ai_retention_prompt(user_text: str, assistant_text: str, primary_scope_type: str) -> str:
+def build_ai_retention_prompt(
+    user_text: str,
+    assistant_text: str,
+    primary_scope_type: str,
+    current_time: str = "",
+    recent_context: list[dict[str, str]] | None = None,
+) -> str:
     allowed_scopes = ["private"] if primary_scope_type not in GROUP_SCOPE_TYPES else ["group_member", "group_shared"]
     payload = {
         "primary_scope_type": primary_scope_type,
         "allowed_scopes": allowed_scopes,
+        "current_time": current_time,
+        "recent_context": list(recent_context or []),
         "user_text": _clean_text(user_text),
-        "assistant_text": _clean_text(assistant_text),
+        "assistant_text": _truncate(_clean_text(assistant_text), AI_PROMPT_ASSISTANT_MAX_CHARS),
     }
     return (
-        "Decide whether this chat turn should be stored as long-term memory.\n"
-        "Return one JSON object only. Do not include markdown.\n"
+        "You extract long-term memories about the USER (or the group) from one chat turn.\n"
+        "A memory is worth keeping only if it would still help a future conversation days or weeks later.\n"
+        "\n"
+        "Only extract from the CURRENT turn (user_text). recent_context holds earlier messages and is only for "
+        "resolving references such as 'that one' or 'move it to Friday'. Never re-extract facts that were "
+        "already stated in recent_context; they were handled in earlier turns.\n"
+        "In group chats recent_context may contain other members' messages; never attribute their facts to "
+        "the current user.\n"
+        "\n"
+        "KEEP (only when stated or clearly confirmed by the user):\n"
+        "- profile: name, nickname, how to address them, identity, job, location, relationships, pets.\n"
+        "- preference: likes/dislikes, answer style, habits, tools they use.\n"
+        "- event: plans, deadlines, ongoing life situations, notable things that happened to them.\n"
+        "- project: what they are building or working on, their stack, decisions they made.\n"
+        "- rule: group rules, announcements, shared agreements.\n"
+        "- correction: the user corrects a previous fact about themselves.\n"
+        "\n"
+        "DO NOT KEEP:\n"
+        "- General knowledge, explanations, code, or advice from assistant_text. assistant_text is context only; "
+        "keep something from it only if the user explicitly adopts it (e.g. user says 'ok, we will use Redis').\n"
+        "- The user's one-off requests or questions themselves (translate this, what is X, write a poem).\n"
+        "- Greetings, thanks, jokes, momentary moods, roleplay content, commands, tool output, errors or refusals.\n"
+        "- Anything you have to guess. If the turn is ambiguous without earlier context, keep nothing.\n"
+        "- API keys, tokens, passwords, private keys, or other secrets.\n"
+        "- Platform user IDs, QQ numbers, group IDs, or other account identifiers.\n"
+        "\n"
+        "Writing rules for each memory text:\n"
+        "- One atomic fact per memory; split unrelated facts into separate memories.\n"
+        "- Standalone and explicit: start with the subject (\"用户…\" / \"The user…\", or \"本群…\" for group facts), "
+        "no pronouns like 'this' or 'that'.\n"
+        "- Resolve relative dates (tomorrow, next Friday) into absolute dates using current_time.\n"
+        "- Prefer Chinese if the user writes Chinese.\n"
+        "\n"
+        "Scopes: use group_shared only for group rules, announcements, or shared team/project facts; "
+        "use group_member for one person's own facts; use private in private chats.\n"
+        "confidence (0-1): how sure you are that this is a durable, useful fact the user actually stated.\n"
+        "\n"
+        "Examples:\n"
+        "- user: '我下周五要考雅思，最近在刷听力' -> keep event '用户计划在<date>参加雅思考试' and event '用户最近在练习雅思听力'.\n"
+        "- user: 'Python 的 GIL 是什么' -> keep nothing (a question; the explanation is general knowledge).\n"
+        "- user: '以后回答简短点，别用 emoji' -> keep preference '用户希望回答简短且不使用 emoji'.\n"
+        "- user: '哈哈谢谢' -> keep nothing.\n"
+        "- recent_context: user '我在考虑用 Redis 还是 Kafka 做消息队列'; user_text: '就用前者吧' -> keep project "
+        "'用户决定在项目中使用 Redis 作为消息队列'.\n"
+        "\n"
+        "Return one JSON object only, no markdown. Return {\"memories\": []} when nothing is worth keeping.\n"
         "Schema: {\n"
-        '  "should_retain": boolean,\n'
-        '  "memory_text": string,\n'
-        '  "scope": "private|group_member|group_shared",\n'
-        '  "memory_type": "preference|profile|project|rule|correction|conversation",\n'
-        '  "confidence": number,\n'
-        '  "sensitivity": "low|personal|high",\n'
+        '  "memories": [\n'
+        "    {\n"
+        '      "text": string,\n'
+        '      "scope": "private|group_member|group_shared",\n'
+        '      "memory_type": "preference|profile|event|project|rule|correction",\n'
+        '      "confidence": number,\n'
+        '      "sensitivity": "low|personal|high"\n'
+        "    }\n"
+        "  ],\n"
         '  "reason": "short reason"\n'
         "}\n"
-        "Write memory_text as a natural, concise, standalone fact that can be searched later. Prefer Chinese if the input is Chinese.\n"
-        "Never retain API keys, tokens, passwords, private keys, or secrets.\n"
-        "Reject temporary chatter, commands, tool output, and assistant failure/refusal text.\n"
-        "Use group_shared only for group rules, announcements, or shared project/team facts.\n"
-        "Use group_member for a specific user's preferences, name, profile, or personal context.\n"
         f"Input JSON: {json.dumps(payload, ensure_ascii=False)}"
     )
+
+
+def is_trivial_message(text: str) -> bool:
+    """True for commands and pure chitchat that never need memory recall or retention."""
+    cleaned = _clean_text(text)
+    return not cleaned or _is_command(cleaned) or _is_chitchat(cleaned)
 
 
 def precheck_ai_retention(
@@ -168,31 +226,67 @@ def precheck_ai_retention(
     )
 
 
-def apply_ai_retention_result(
+def apply_ai_retention_results(
     base_decision: RetainDecision,
     response_text: str,
     primary_scope_type: str,
     config: Any,
-) -> RetainDecision | None:
+) -> list[RetainDecision] | None:
+    """Turn the memory AI JSON into one decision per memory.
+
+    Returns None for unparseable output so the caller can fall back to rules.
+    When nothing is retained, returns a single skip decision explaining why.
+    """
     data = _extract_json_object(response_text)
     if data is None:
         return None
 
-    sensitivity = _normalize_sensitivity(data.get("sensitivity"), base_decision.sensitivity)
-    confidence = _clamp_float(data.get("confidence"), base_decision.confidence)
-    if not _bool_value(data.get("should_retain")):
-        return _skip("ai_rejected", sensitivity=sensitivity)
+    if isinstance(data.get("memories"), list):
+        items = [item for item in data["memories"] if isinstance(item, dict)]
+    elif "should_retain" in data:
+        # Legacy single-memory shape: {"should_retain": ..., "memory_text": ...}.
+        items = [dict(data, text=data.get("memory_text", ""))] if _bool_value(data.get("should_retain")) else []
+    else:
+        return None
+
+    if not items:
+        return [_skip("ai_rejected", sensitivity=base_decision.sensitivity)]
+
+    decisions: list[RetainDecision] = []
+    skips: list[RetainDecision] = []
+    seen_texts: set[str] = set()
+    for item in items[:MAX_AI_MEMORIES_PER_TURN]:
+        decision = _ai_memory_decision(base_decision, item, primary_scope_type, config)
+        if not decision.should_retain:
+            skips.append(decision)
+            continue
+        key = _similarity_text(decision.memory_text)
+        if key in seen_texts:
+            continue
+        seen_texts.add(key)
+        decisions.append(decision)
+    return decisions or skips[:1] or [_skip("ai_rejected", sensitivity=base_decision.sensitivity)]
+
+
+def _ai_memory_decision(
+    base_decision: RetainDecision,
+    item: dict[str, Any],
+    primary_scope_type: str,
+    config: Any,
+) -> RetainDecision:
+    sensitivity = _normalize_sensitivity(item.get("sensitivity"), base_decision.sensitivity)
+    confidence = _clamp_float(item.get("confidence"), base_decision.confidence)
     if confidence < _ai_min_confidence(config):
         return _skip("ai_low_confidence", sensitivity=sensitivity)
 
-    memory_text = _clean_text(data.get("memory_text", ""))
+    memory_text = _clean_text(item.get("text", ""))
     if not memory_text:
         return _skip("ai_empty_memory_text", sensitivity=sensitivity)
     if _has_hard_sensitive_secret(memory_text):
         return _skip("hard_sensitive", sensitivity="high")
 
-    target_scope_types = _ai_target_scope_types(data.get("scope"), primary_scope_type, base_decision.target_scope_types)
-    memory_type = _normalize_memory_type(data.get("memory_type", data.get("reason")), base_decision.memory_type)
+    target_scope_types = _ai_target_scope_types(item.get("scope"), primary_scope_type, base_decision.target_scope_types)
+    memory_type = _normalize_memory_type(item.get("memory_type", item.get("reason")), base_decision.memory_type)
     return RetainDecision(
         should_retain=True,
         reason=f"ai_{memory_type}",
@@ -560,6 +654,8 @@ def _normalize_memory_type(value: Any, default: str) -> str:
     aliases = {
         "stable_user_preference": "preference",
         "user_preference": "preference",
+        "life_event": "event",
+        "plan": "event",
         "group_rule": "rule",
         "sensitive": "conversation",
         "duplicate_risk": "conversation",
@@ -622,6 +718,12 @@ def _personalize_user_fact(text: str) -> str:
 
 def _normalize_spaces(text: str) -> str:
     return " ".join(str(text or "").split())
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
 
 
 def _similarity_text(text: str) -> str:

@@ -66,6 +66,13 @@ class MemoryAiTests(unittest.TestCase):
         self.assertIn("Do not answer the user", prompt)
         self.assertIn('"user_query"', prompt)
 
+    def test_recall_prompt_includes_recent_context(self):
+        prompt = build_recall_query_prompt("那前者呢", [{"role": "user", "text": "Redis 还是 Kafka"}])
+
+        self.assertIn('"recent_context"', prompt)
+        self.assertIn("Redis 还是 Kafka", prompt)
+        self.assertIn("resolve references", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

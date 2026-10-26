@@ -1,18 +1,24 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 import json
 import secrets
 import uuid
-from typing import Any, TYPE_CHECKING, Protocol, Sequence
+from typing import Any, Protocol, Sequence
 
 from astrbot.api import logger
 
-from .memory_formatter import DEFAULT_ITEM_MAX_CHARS, MAX_EXTRACT_DEPTH, dedupe_memories, extract_memories, format_recall_results
-
-if TYPE_CHECKING:
-    from .supermemory_client import SupermemoryClient
+from .memory_formatter import (
+    DEFAULT_ITEM_MAX_CHARS,
+    GUIDANCE_LINE,
+    MAX_EXTRACT_DEPTH,
+    extract_memories,
+    format_recall_results,
+    merge_ranked_memories,
+)
+from .supermemory_client import SupermemoryClient, SupermemoryClientError
 
 
 SALT_FILE = "salt.txt"
@@ -141,21 +147,40 @@ async def run_manual_recall_for_scopes(
     max_extract_depth: int = MAX_EXTRACT_DEPTH,
     queries: Sequence[str] | None = None,
     empty_message: str = "当前会话 scope 下没有召回到相关记忆。",
+    guidance: bool = False,
 ) -> str:
-    formatted_parts: list[str] = []
     recall_queries = _recall_queries(query, queries)
-    for scope in scopes:
-        memories: list[Any] = []
-        for recall_query in recall_queries:
-            raw = await client.search(
+    requests = [(scope, recall_query) for scope in scopes for recall_query in recall_queries]
+    results = await asyncio.gather(
+        *(
+            client.search(
                 query=recall_query,
                 container_tag=scope.container_tag,
                 limit=limit,
                 threshold=threshold,
                 search_mode=search_mode,
             )
-            memories.extend(extract_memories(raw))
-        memories = dedupe_memories(memories, max_extract_depth=max_extract_depth)
+            for scope, recall_query in requests
+        ),
+        return_exceptions=True,
+    )
+    ranked_lists: dict[int, list[list[Any]]] = {}
+    failures: list[SupermemoryClientError] = []
+    for (scope, _), result in zip(requests, results):
+        if isinstance(result, SupermemoryClientError):
+            failures.append(result)
+        elif isinstance(result, BaseException):
+            raise result
+        else:
+            ranked_lists.setdefault(id(scope), []).append(extract_memories(result))
+    if failures and not ranked_lists:
+        raise failures[0]
+    if failures and logger is not None:
+        logger.warning(f"Supermemory recall partially failed ({len(failures)}/{len(results)}): {failures[0]}")
+
+    formatted_parts: list[str] = []
+    for scope in scopes:
+        memories = merge_ranked_memories(ranked_lists.get(id(scope), []), max_extract_depth=max_extract_depth)
         formatted = format_recall_results(
             memories,
             limit=limit,
@@ -168,6 +193,8 @@ async def run_manual_recall_for_scopes(
 
     if not formatted_parts:
         return empty_message
+    if guidance:
+        formatted_parts.insert(0, GUIDANCE_LINE)
     return "\n".join(formatted_parts)
 
 

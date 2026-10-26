@@ -18,6 +18,8 @@ The plugin should stay lightweight:
 - `supermemory_client.py`: async Supermemory API client.
 - `memory_formatter.py`: formats recalled memories for prompt injection.
 - `commands.py`: local salt/state store and command helpers.
+- `conversation_context.py`: recent-turn extraction from `req.contexts` for retention and recall query rewriting.
+- `retention_policy.py` / `memory_ai.py`: retention rules and memory AI prompts, kept in sync with `astrbot_plugin_hindsight_memory`.
 - `_conf_schema.json`: AstrBot plugin config schema.
 - `metadata.yaml`: AstrBot plugin metadata.
 - `tests/`: unit and static contract tests.
@@ -53,7 +55,7 @@ Run tests with bytecode disabled to keep the worktree clean:
 
 ```powershell
 python -B -m unittest discover -s tests -v
-python -B -m py_compile main.py commands.py scope.py memory_formatter.py supermemory_client.py
+python -B -m py_compile main.py commands.py scope.py memory_formatter.py supermemory_client.py retention_policy.py memory_ai.py conversation_context.py
 ```
 
 The test suite should pass without real Supermemory credentials; API behavior is tested with `httpx.MockTransport`.

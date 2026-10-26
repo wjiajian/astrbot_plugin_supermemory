@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from datetime import datetime
+import re
 from typing import Any
 
 
 DEFAULT_ITEM_MAX_CHARS = 360
 MAX_EXTRACT_DEPTH = 4
+RRF_K = 60
+DATE_KEYS = ("date", "createdAt", "created_at", "updatedAt", "updated_at")
+GUIDANCE_LINE = (
+    "以下是关于当前用户/群的长期记忆，按需自然参考，不要逐条复述；"
+    "与用户当前说法冲突时以当前说法为准；与当前话题无关则忽略。"
+)
 
 
 def format_recall_results(
@@ -23,11 +31,36 @@ def format_recall_results(
         text = _extract_text(memory, max_depth=max_extract_depth)
         if not text:
             continue
-        lines.append(f"- {_truncate(_normalize_text(text), item_max_chars)}")
+        lines.append(f"- {_memory_prefix(memory)}{_truncate(_normalize_text(text), item_max_chars)}")
 
     if not lines:
         return ""
     return f'<supermemory_context scope="{title}">\n' + "\n".join(lines) + "\n</supermemory_context>"
+
+
+def _memory_prefix(memory: Any) -> str:
+    if not isinstance(memory, dict):
+        return ""
+    for key in DATE_KEYS:
+        date = _memory_date(memory.get(key))
+        if date:
+            return f"[{date}] "
+    return ""
+
+
+def _memory_date(value: Any) -> str:
+    """Return the local YYYY-MM-DD of an ISO 8601 timestamp, or "" if unparseable."""
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    raw = value.strip()
+    try:
+        parsed = datetime.fromisoformat(raw[:-1] + "+00:00" if raw.endswith(("Z", "z")) else raw)
+    except ValueError:
+        match = re.match(r"^(\d{4}-\d{2}-\d{2})", raw)
+        return match.group(1) if match else ""
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone()
+    return parsed.date().isoformat()
 
 
 def extract_memories(raw: Any) -> list[Any]:
@@ -57,17 +90,35 @@ def extract_memory_texts(raw: Any, limit: int = 0, max_extract_depth: int = MAX_
     return texts
 
 
-def dedupe_memories(memories: list[Any], max_extract_depth: int = MAX_EXTRACT_DEPTH) -> list[Any]:
-    seen: set[str] = set()
-    deduped: list[Any] = []
-    for memory in memories:
-        text = _extract_text(memory, max_depth=max_extract_depth)
-        key = _normalize_text(text).lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(memory)
-    return deduped
+def merge_ranked_memories(
+    ranked_lists: list[list[Any]],
+    max_extract_depth: int = MAX_EXTRACT_DEPTH,
+    rrf_k: int = RRF_K,
+) -> list[Any]:
+    """Merge several ranked search result lists with reciprocal rank fusion.
+
+    Each list comes from one query against the same scope. Concatenating them
+    would let the first query fill the whole injection budget; RRF instead
+    favors memories ranked high in any list and memories returned by several
+    queries.
+    """
+    scores: dict[str, float] = {}
+    first_seen: dict[str, tuple[int, Any]] = {}
+    order = 0
+    for memories in ranked_lists:
+        seen_in_list: set[str] = set()
+        for rank, memory in enumerate(memories):
+            text = _extract_text(memory, max_depth=max_extract_depth)
+            key = _normalize_text(text).lower()
+            if not key or key in seen_in_list:
+                continue
+            seen_in_list.add(key)
+            scores[key] = scores.get(key, 0.0) + 1.0 / (rrf_k + rank + 1)
+            if key not in first_seen:
+                first_seen[key] = (order, memory)
+                order += 1
+    ranked_keys = sorted(scores, key=lambda key: (-scores[key], first_seen[key][0]))
+    return [first_seen[key][1] for key in ranked_keys]
 
 
 def format_search_results(
