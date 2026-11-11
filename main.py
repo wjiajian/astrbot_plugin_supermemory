@@ -13,6 +13,7 @@ from astrbot.api.star import Context, Star, StarTools
 from astrbot.core.agent.message import TextPart
 
 from .commands import PluginStateStore, build_help_text, run_manual_recall_for_scopes
+from .companion_bridge import CompanionMemoryBridge
 from .conversation_context import DEFAULT_CONTEXT_TURNS, recent_turns, short_query_with_context
 from .memory_ai import (
     build_recall_query_prompt,
@@ -59,13 +60,21 @@ class SupermemoryPlugin(Star):
         self.salt = self.store.get_or_create_salt()
         self.supermemory_client: SupermemoryClient | None = None
         self.supermemory_client_signature: tuple[str, str, int] | None = None
+        self.companion_bridge = CompanionMemoryBridge(self)
+
+    async def initialize(self):
+        await self.companion_bridge.ensure_registered()
 
     async def terminate(self):
+        await self.companion_bridge.disconnect()
         if self.supermemory_client is not None:
             await self.supermemory_client.aclose()
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
+        bridge = getattr(self, "companion_bridge", None)
+        if bridge is not None:
+            await bridge.ensure_registered()
         if not self._base_enabled():
             return
         scopes = self._scopes(event)

@@ -5,6 +5,18 @@
     "default": true,
     "hint": "总开关。关闭后插件不再读取或写入任何记忆，已保存的记忆不受影响。"
   },
+  "companion_provider_enabled": {
+    "description": "接入陪伴插件（private_companion）",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后向 astrbot_plugin_private_companion 7.0.7+ 注册为外部记忆 Provider，由 Supermemory 承接模型侧记忆，并接收角色日记、梦境和主动消息。角色记录单独保存，不参与私聊或群聊召回；已有记忆不迁移。接管是安装级的：/supermemory off 不会恢复陪伴插件内置记忆，也不会停止角色记录上传。要恢复陪伴插件自己管理记忆，请关闭此项或停用本插件。Hindsight、Supermemory 和其他外部记忆插件同时安装时，仅启用一个长期记忆插件。"
+  },
+  "companion_retain_personal_sensitive": {
+    "description": "允许保存含个人信息的角色记录",
+    "type": "bool",
+    "default": false,
+    "hint": "陪伴插件的日记、梦境和主动消息里出现邮箱、手机号、身份证号或地址时，默认不写入 Supermemory；打开后才保存。密码、API Key、私钥这类硬凭据无论此项如何都不会保存。"
+  },
   "api_base": {
     "description": "Supermemory 服务地址",
     "type": "string",
@@ -78,7 +90,7 @@
     "description": "自动保存新记忆",
     "type": "bool",
     "default": true,
-    "hint": "开启后，机器人每次回复后会判断这轮对话里有没有值得长期记住的内容，有就保存。关闭后只读取已有记忆，不再新增。"
+    "hint": "开启后，机器人每次回复后会判断这轮对话里有没有值得长期记住的内容，有就保存。关闭后停止自动保存对话；陪伴插件的角色记录由“接入陪伴插件”单独控制。"
   },
   "retain_decision_mode": {
     "description": "自动保存的严格程度",

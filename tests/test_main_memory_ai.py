@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import importlib
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -94,6 +95,24 @@ main = importlib.import_module("astrbot_plugin_supermemory.main")
 
 
 class MainMemoryAiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_companion_bridge_follows_plugin_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(main.StarTools, "get_data_dir", return_value=Path(tmp)):
+                plugin = main.SupermemoryPlugin(SimpleNamespace(), {"enabled": False})
+            self.assertIs(plugin.companion_bridge.plugin, plugin)
+            bridge = SimpleNamespace(ensure_registered=AsyncMock(), disconnect=AsyncMock())
+            plugin.companion_bridge = bridge
+
+            await plugin.initialize()
+            await plugin.on_llm_request(SimpleNamespace(), SimpleNamespace())
+            self.assertEqual(bridge.ensure_registered.await_count, 2)
+
+            order = []
+            bridge.disconnect.side_effect = lambda: order.append("disconnect")
+            plugin.supermemory_client = SimpleNamespace(aclose=AsyncMock(side_effect=lambda: order.append("close")))
+            await plugin.terminate()
+            self.assertEqual(order, ["disconnect", "close"])
+
     def test_retain_metadata_serializes_confidence_as_string(self):
         plugin = _plugin({})
         decision = main.RetainDecision(

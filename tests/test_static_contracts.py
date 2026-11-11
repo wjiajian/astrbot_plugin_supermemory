@@ -20,6 +20,8 @@ class StaticContractTests(unittest.TestCase):
 
         for key in (
             "enabled",
+            "companion_provider_enabled",
+            "companion_retain_personal_sensitive",
             "api_base",
             "api_key",
             "enable_private_memory",
@@ -53,6 +55,8 @@ class StaticContractTests(unittest.TestCase):
         ):
             self.assertIn(key, config)
         self.assertEqual(config["context_turns"]["default"], 3)
+        self.assertIs(config["companion_provider_enabled"]["default"], False)
+        self.assertIs(config["companion_retain_personal_sensitive"]["default"], False)
         self.assertEqual(config["search_mode"]["options"], ["memories", "hybrid", "documents"])
         self.assertEqual(config["retain_decision_mode"]["options"], ["balanced", "strict", "all"])
         self.assertEqual(config["api_base"]["default"], "https://api.supermemory.ai")

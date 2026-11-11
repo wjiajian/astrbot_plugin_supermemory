@@ -17,6 +17,7 @@ Supermemory 是一个面向 AI 应用的记忆服务，可以把对话内容写�
 - 支持 `search_threshold` 和 `search_mode` 调整召回严格程度与搜索模式。
 - 结合最近几轮对话理解“就用那个”这类指代，用于判断记什么、查什么。
 - 提供 `/supermemory` 命令，用于状态检查、手动召回和当前会话临时开关。
+- 可选接入 private_companion 7.0.7+，承接模型侧记忆，并把角色日记、梦境和主动消息保存到独立的角色容器。
 
 ## 平台兼容性
 
@@ -54,6 +55,8 @@ pip install -r data/plugins/astrbot_plugin_supermemory/requirements.txt
 | 页面名称 | 默认值 | 说明 |
 |---|---|---|
 | 启用长期记忆（`enabled`） | 开启 | 总开关。关闭后插件不再读取或写入任何记忆，已保存的记忆不受影响。 |
+| 接入陪伴插件（`companion_provider_enabled`） | 关闭 | 向 private_companion 7.0.7+ 注册为外部记忆 Provider，承接模型侧记忆，并接收角色日记、梦境和主动消息。没装陪伴插件时无效果；具体行为见下方协同说明。 |
+| 允许保存含个人信息的角色记录（`companion_retain_personal_sensitive`） | 关闭 | 角色记录里的邮箱、手机号、身份证号或地址默认不保存，打开后才保存。密码、API Key、私钥始终不保存。 |
 | Supermemory 服务地址（`api_base`） | `https://api.supermemory.ai` | 保持默认即可。 |
 | Supermemory API Key（必填）（`api_key`） | 空 | 在 Supermemory Developer Platform 后台创建并复制到这里。 |
 | 连接 Supermemory 的超时时间（秒）（`request_timeout_seconds`） | `8` | 超过这个时间没有响应就放弃本次读写，机器人照常回复。网络较慢时可适当调大。 |
@@ -81,7 +84,7 @@ pip install -r data/plugins/astrbot_plugin_supermemory/requirements.txt
 
 | 页面名称 | 默认值 | 说明 |
 |---|---|---|
-| 自动保存新记忆（`retain_enabled`） | 开启 | 机器人每次回复后会判断这轮对话里有没有值得长期记住的内容，有就保存。关闭后只读取已有记忆，不再新增。 |
+| 自动保存新记忆（`retain_enabled`） | 开启 | 机器人每次回复后判断这轮对话有没有值得长期记住的内容，有就保存。关闭后停止自动保存对话；陪伴插件的角色记录由“接入陪伴插件”单独控制。 |
 | 自动保存的严格程度（`retain_decision_mode`） | 均衡（`balanced`） | 均衡：只保存偏好、身份、约定这类长期有用的信息，忽略闲聊。严格（`strict`）：只有用户明确说“记住……”时才保存。全部保存（`all`）：每轮对话原样保存，记忆库增长快、噪音多，仅用于兼容旧版本。 |
 | 过短的消息不保存（字数）（`retain_min_chars`） | `8` | 用户消息的有效字数少于此值时，视为信息量不足，不会自动保存。用户明确说“记住”时不受此限制。 |
 | 隐私信息需用户明确要求才保存（`retain_sensitive_requires_explicit`） | 开启 | 包含手机号、邮箱、身份证号等隐私信息的消息，只有用户明确说“记住”才会保存。密码、API Key、Token、私钥等密钥无论如何都不会保存。 |
@@ -141,6 +144,23 @@ Supermemory 仍继续使用现有 `search_threshold` 和 `search_mode`，本版�
 
 `/supermemory on` 和 `/supermemory off` 的状态保存在 AstrBot 插件数据目录中，只影响当前会话 scope，不会修改 Supermemory 中已有的记忆。
 
+## 与陪伴插件（private_companion）协同
+
+[陪伴插件](https://github.com/menglimi/astrbot_plugin_private_companion) 7.0.7+ 提供 `companion.external-memory.v1` 接口。在两个插件都启用、Supermemory API Key 已配置后，打开“接入陪伴插件”并重载插件即可使用；该选项默认关闭。
+
+- Supermemory 注册为 `handles_model_memory=True` 的 Provider，继续通过自己的 LLM 钩子召回和保存对话。陪伴插件的内置记忆注入与记忆工具随之让位；本插件不注册 `read` 或 `summary` 回调。
+- 日记、梦境（`persona_life`）和主动消息（`proactive_message`）作为角色自己的内容写入独立的 `astrbot_persona_<platform>_<role_hash>_<installation_hash>` 容器，**不参与私聊、群聊召回**。角色、安装和会话身份均使用带盐哈希。
+- 角色记录沿用现有敏感内容规则：硬凭据始终拒绝，个人信息默认拒绝，由“允许保存含个人信息的角色记录”单独控制。
+- 同一目标内按 `memory_id` 防止重复写入，并使用稳定的 `conversationId`。本地账本保留 30 天、最多 5000 条；账本占位无法写入磁盘时，不提交远端写入。
+- 只有确定未接收的失败（4xx、连接未建立）进入本地补写队列。队列最多 50 条，从首次失败起保留 24 小时；后续成功写入时最多补写 10 条，并检查时间预算。宿主取消回调或进程重启时，尚未处理的队列条目继续保留。
+- 超时、连接中断、5xx、响应无法解析或回调被取消时，远端可能已经接收，账本保留 `pending`，后续不自动重写；原记录仍在陪伴插件中。
+- 账本和队列按“服务地址 + API Key 的带盐哈希”分区。换地址或 Key 后，旧目标的失败记录不会补写到新目标。由于无法仅凭 Key 判断账号是否相同，同一账号轮换 Key 也会视为新目标；已保存的记录若再次推送，可能重新写入。
+- 停用时先停止接收新写入，再等待在途写入与补写结束（最多 10 秒）并注销；注销失败时保留引用供重试，该注册不再参与选择。
+
+接管是安装级的。执行 `/supermemory off` 或关闭某类会话记忆后，该会话不会自动回退到陪伴插件的内置记忆；角色记录上传仍由“接入陪伴插件”控制，不受会话开关或 `retain_enabled` 影响。两边已有的记忆不会迁移。关闭“接入陪伴插件”或停用 Supermemory，即可让陪伴插件恢复管理自己的记忆。
+
+同时安装 Hindsight、Supermemory 或其他外部记忆插件时，仅启用其中一个长期记忆插件。只关闭陪伴接入开关，不会停止该插件自身的 LLM 记忆注入。
+
 ## Scope 隔离策略
 
 Supermemory 使用 `containerTag` 隔离不同会话 scope。
@@ -192,7 +212,7 @@ astrbot_group_member_<platform_id>_<group_id_hash>_<sender_id_hash>_<umo_hash>
 - 群聊事件暂时拿不到 `group_id`，插件会降级为私聊 scope；之后如果又能拿到 `group_id`，scope 会发生变化。
 - 群聊事件拿不到当前发言人的 `sender_id`，插件会跳过本轮记忆操作，避免多个未知用户被归入同一个个人记忆层。
 
-迁移 AstrBot 或插件时，建议同时备份插件数据目录中的 `salt.txt` 和 `scope_state.json`。其中 `salt.txt` 会影响历史记忆是否还能被同一 scope 召回，`scope_state.json` 保存 `/supermemory on` 和 `/supermemory off` 的当前会话开关状态。
+迁移 AstrBot 或插件时，建议同时备份插件数据目录中的 `salt.txt` 和 `scope_state.json`。其中 `salt.txt` 会影响历史记忆是否还能被同一 scope 召回，`scope_state.json` 保存 `/supermemory on` 和 `/supermemory off` 的当前会话开关状态。使用陪伴插件接入时，一并备份 `companion_written_ids.json`（去重账本）和 `companion_pending_records.json`（补写队列）。
 
 ## Supermemory API
 
@@ -217,7 +237,7 @@ python -B -m unittest discover -s tests -v
 ### 语法检查
 
 ```bash
-python -B -m py_compile main.py commands.py supermemory_client.py memory_formatter.py scope.py retention_policy.py memory_ai.py conversation_context.py
+PYTHONPYCACHEPREFIX=/tmp/supermemory-pycache python -m py_compile main.py commands.py supermemory_client.py memory_formatter.py scope.py retention_policy.py memory_ai.py conversation_context.py companion_bridge.py
 ```
 
 ### AstrBot 手动验收
